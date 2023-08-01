@@ -1,0 +1,6 @@
+log.txt
+private
+__pycache__
+*tests.py
+venv
+.vscode
