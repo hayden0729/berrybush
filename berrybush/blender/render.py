@@ -819,9 +819,8 @@ class MainBRRESRenderer():
             if obj.name not in self.objects:
                 self._updateMeshCache(obj, depsgraph)
         # update modified stuff
-        if not context:
-            return
-        tevIDs = {t.uuid for t in context.scene.brres.tevConfigs} | {""} # for tev delete detection
+        tevConfigs = context.scene.brres.tevConfigs if context else ()
+        tevIDs = {t.uuid for t in tevConfigs} | {""} # for tev config deletion detection
         for update in depsgraph.updates:
             updatedID = update.id
             if isinstance(updatedID, bpy.types.Object) and updatedID.name in self.objects:
@@ -858,7 +857,10 @@ class MainBRRESRenderer():
                             mat.brres.tevID = ""
                             self._updateMatCache(mat)
                 except AttributeError:
-                    pass # no active material, so don't worry about it
+                    # no active material, so don't worry about it
+                    # (or no context provided, which means this is a final render, and in that case
+                    # tev deletion makes no sense as that's not animatable)
+                    pass
 
     def draw(self, projectionMtx: Matrix, viewMtx: Matrix):
         """Draw the current BRRES scene to the active framebuffer."""
@@ -1128,7 +1130,7 @@ class BRRESRenderEngine(bpy.types.RenderEngine):
                 self.drawScene(projectionMtx, viewMtx, translucent=True)
             b = gpu.types.Buffer('FLOAT', (dims[0] * dims[1], 4))
             fb.read_color(0, 0, *dims, 4, 0, 'FLOAT', data=b)
-            result.layers[0].passes["Combined"].rect = b
+            result.layers[0].passes["Combined"].rect.foreach_set(b)
         offscreen.free()
         self.end_result(result)
 
