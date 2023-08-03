@@ -1443,10 +1443,10 @@ class ImportBRRES(bpy.types.Operator, ImportHelper):
     settings: bpy.props.PointerProperty(type=ImportSettings)
 
     def execute(self, context):
-        # import cProfile, pstats
-        # from pstats import SortKey
-        # pr = cProfile.Profile()
-        # pr.enable()
+        import cProfile, pstats
+        from pstats import SortKey
+        pr = cProfile.Profile()
+        pr.enable()
 
         restoreShading = solidView(context) # temporarily set viewports to solid view for speed
         context.window.cursor_set('WAIT')
@@ -1460,10 +1460,10 @@ class ImportBRRES(bpy.types.Operator, ImportHelper):
         context.window.cursor_set('DEFAULT')
         restoreView(restoreShading)
 
-        # pr.disable()
-        # with open(LOG_PATH, "w", encoding="utf-8") as logFile:
-        #     ps = pstats.Stats(pr, stream=logFile).sort_stats(SortKey.CUMULATIVE)
-        #     ps.print_stats()
+        pr.disable()
+        with open(LOG_PATH, "w", encoding="utf-8") as logFile:
+            ps = pstats.Stats(pr, stream=logFile).sort_stats(SortKey.CUMULATIVE)
+            ps.print_stats()
         return {'FINISHED'}
 
     def draw(self, context: bpy.types.Context):
