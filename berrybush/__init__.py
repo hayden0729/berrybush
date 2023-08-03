@@ -148,6 +148,7 @@ def register():
     bpy.types.Image.brres = bpy.props.PointerProperty(type=texture.ImgSettings)
     bpy.types.TOPBAR_MT_file_import.append(brresimport.drawOp)
     bpy.types.TOPBAR_MT_file_export.append(brresexport.drawOp)
+    bpy.types.VIEW3D_MT_object.append(verify.drawOp)
     bpy.app.handlers.load_post.append(updater.update)
     render.BRRESRenderEngine.registerOnPanels()
 
@@ -155,6 +156,7 @@ def register():
 def unregister():
     render.BRRESRenderEngine.unregisterOnPanels()
     bpy.app.handlers.load_post.remove(updater.update)
+    bpy.types.VIEW3D_MT_object.remove(verify.drawOp)
     bpy.types.TOPBAR_MT_file_export.remove(brresexport.drawOp)
     bpy.types.TOPBAR_MT_file_import.remove(brresimport.drawOp)
     del bpy.types.Image.brres

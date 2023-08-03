@@ -204,7 +204,7 @@ class VerifySettings(bpy.types.PropertyGroup):
 
 
 class VerifyBRRES(bpy.types.Operator):
-    """Write a BRRES file"""
+    """Verify the scene's BRRES settings"""
 
     bl_idname = "brres.verify"
     bl_label = "Verify BRRES Settings"
