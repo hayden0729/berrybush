@@ -795,9 +795,12 @@ class MainBRRESRenderer():
             self.shader = self._compileShader()
         # remove deleted stuff
         isObjUpdate = depsgraph.id_type_updated('OBJECT')
+        vl = context.view_layer if context else None
+        vp = context.space_data if context else None
         if isObjUpdate:
-            depsgraphObjects = {o.name for o in depsgraph.objects}
-            self.objects = {o: info for o, info in self.objects.items() if o in depsgraphObjects}
+            dObjs = depsgraph.objects
+            names = {o.name for o in dObjs if o.original.visible_get(view_layer=vl, viewport=vp)}
+            self.objects = {n: info for n, info in self.objects.items() if n in names}
         isMatUpdate = depsgraph.id_type_updated('MATERIAL')
         if isMatUpdate:
             for matName, matInfo in tuple(self.materials.items()):
@@ -815,9 +818,9 @@ class MainBRRESRenderer():
                 if img not in usedImages:
                     self._deleteImg(img)
         # add new stuff
-        for obj in depsgraph.objects:
-            if obj.name not in self.objects:
-                self._updateMeshCache(obj, depsgraph)
+        for o in depsgraph.objects:
+            if o.name not in self.objects and o.original.visible_get(view_layer=vl, viewport=vp):
+                self._updateMeshCache(o, depsgraph)
         # update modified stuff
         tevConfigs = context.scene.brres.tevConfigs if context else ()
         tevIDs = {t.uuid for t in tevConfigs} | {""} # for tev config deletion detection
