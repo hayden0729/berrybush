@@ -2,6 +2,7 @@
 from ast import literal_eval
 import pathlib
 import re
+import textwrap
 # 3rd party imports
 import bpy
 from bpy_extras.io_utils import axis_conversion
@@ -95,6 +96,18 @@ def enumVal(data, propName: str, enumItem: str = None, callback = None):
         else: # numeric values are automatic
             return next(i for i, item in enumerate(items) if item[0] == enumItem)
     return data.bl_rna.properties[propName].enum_items[enumItem].value
+
+
+def paragraphLabel(layout: bpy.types.UILayout, text: str, widthChars = 55):
+    """Draw a multi-line label w/ automatic wrapping on a layout."""
+    # https://blender.stackexchange.com/questions/74052/wrap-text-within-a-panel
+    wrapp = textwrap.TextWrapper(width=widthChars)
+    wList = wrapp.wrap(text)
+    for textRow in wList:
+        row = layout.row(align=True)
+        row.alignment = 'EXPAND'
+        row.scale_y = 0.6
+        row.label(text=textRow)
 
 
 def usedMatSlots(obj: bpy.types.Object, mesh: bpy.types.Mesh):
@@ -229,7 +242,8 @@ def getFaceMatIdcs(mesh: bpy.types.Mesh):
     return foreachGet(mesh.polygons, "material_index", dtype=np.integer)
 
 
-def getLayerData(mesh: bpy.types.Mesh, layerNames: tuple[str], isUV = False, unique = True):
+def getLayerData(mesh: bpy.types.Mesh, layerNames: tuple[str],
+                 isUV = False, unique = True, doProcessing = True):
     """Get the data for a series of mesh layers.
 
     Each entry of this data contains the layer, its data, and the indices into this data that should
@@ -238,9 +252,11 @@ def getLayerData(mesh: bpy.types.Mesh, layerNames: tuple[str], isUV = False, uni
 
     The layers are looked up by name, and the returned value is a list of tuples containing layers &
     numpy arrays of their data. Since name collisions can occur between UV layers and generic
-    attributes, you can choose which to prioritize. (If the UV flag is enabled, this also causes
+    attributes, you can choose which to prioritize.
+
+    Optionally, data can be processed after retrieval. If the UV flag is enabled, this causes
     the Y coordinates of the data to be flipped because of differences in conventions between
-    Blender & BRRES; if disabled, this also causes the data to be clamped from 0-1)
+    Blender & BRRES; otherwise, this also causes the data to be clamped from 0-1.
     """
     uvLayers = mesh.uv_layers.keys()
     genericLayers = mesh.attributes.keys()
@@ -265,20 +281,35 @@ def getLayerData(mesh: bpy.types.Mesh, layerNames: tuple[str], isUV = False, uni
         elif isGenericLayer:
             layer = mesh.attributes[layerName]
             layerCompCount = ATTR_COMP_COUNTS.get(layer.data_type, 1)
-            try:
-                layerData = foreachGet(layer.data, "value", layerCompCount)
-            except AttributeError:
+            for propName in ("value", "color", "vector"):
                 try:
-                    layerData = foreachGet(layer.data, "color", layerCompCount)
+                    layerData = foreachGet(layer.data, propName, layerCompCount)
+                    break
                 except AttributeError:
-                    layerData = foreachGet(layer.data, "vector", layerCompCount)
+                    pass
         # then, process data & add to list
         if layerData is not None:
-            if isUV: # flip uvs
-                layerData[:, 1] = 1 - layerData[:, 1]
-            else: # clamp colors
-                layerData.clip(0, 1, out=layerData)
+            if doProcessing:
+                if isUV: # flip uvs
+                    layerData[:, 1] = 1 - layerData[:, 1]
+                else: # clamp colors
+                    layerData.clip(0, 1, out=layerData)
             if unique:
                 layerData, layerIdcs = np.unique(layerData, return_inverse=True, axis=0)
         allData.append((layer, layerData, layerIdcs))
     return allData
+
+
+def setLayerData(layerData: dict[bpy.types.Attribute, np.ndarray]):
+    """Easily set the data for mesh attribute/UV layers. No additional processing is performed."""
+    meshes: set[bpy.types.Mesh] = set()
+    for layer, data in layerData.items():
+        meshes.add(layer.id_data)
+        for propName in ("uv", "value", "color", "vector"):
+            try:
+                layer.data.foreach_set(propName, data.flatten())
+                break
+            except AttributeError:
+                pass
+    for mesh in meshes:
+        mesh.update()
