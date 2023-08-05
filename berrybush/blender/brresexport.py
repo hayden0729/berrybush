@@ -309,9 +309,11 @@ class BRRESMdlExporter():
         self.model.vertGroups[groupType].append(group)
         ndims = group.ctype.ndims
         # pad/crop data if wrong # of dimensions
-        paddedData = np.zeros((len(data), ndims))
+        paddedData = np.full((len(data), ndims), groupType.ATTR_TYPE.PAD_VAL, np.float32)
         data = data[:, :ndims]
         paddedData[:, :data.shape[1]] = data
+        if groupType is mdl0.ClrGroup:
+            paddedData[:, :3] **= (1 / 2.2)
         group.setData(paddedData)
         return group
 
