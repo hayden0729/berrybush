@@ -593,7 +593,9 @@ class BRRESMdlExporter():
             # this is hard to put into words but hopefully that made sense
             joint.segScaleComp = bone.inherit_scale == 'NONE'
             # store parent-relative transform
-            joint.setSRT(*self.parentExporter.getLocalSRT(poseBone, boneLocalScales, boneMtcs))
+            srt = np.array(self.parentExporter.getLocalSRT(poseBone, boneLocalScales, boneMtcs))
+            srt[np.isclose(srt, 0, atol=0.001)] = 0
+            joint.setSRT(*srt)
         for boneName, joint in self.joints.items():
             boneSettings = rigObj.data.bones[boneName].brres
             joint.bbMode = mdl0.BillboardMode[boneSettings.bbMode]
@@ -765,6 +767,7 @@ class BRRESChrExporter(BRRESAnimExporter[chr0.CHR0]):
                     pass
             chrAnim.jointAnims.append(jointAnim)
             allAnims = (jointAnim.scale, jointAnim.rot, jointAnim.trans)
+            frameVals[np.isclose(frameVals, 0, atol=0.001)] = 0
             for anims, frames in zip(allAnims, frameVals.transpose((1, 2, 0))):
                 for anim, compVals in zip(anims, frames):
                     # filter out frames w/ the same values as prev & next frames
