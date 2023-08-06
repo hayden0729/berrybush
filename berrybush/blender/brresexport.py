@@ -992,7 +992,7 @@ class BRRESVisExporter(BRRESAnimExporter[vis0.VIS0]):
         frameStart = parentExporter.settings.frameStart
         strip = track.strips[0]
         action = strip.action
-        rigObj: bpy.types.Object = track.id_data
+        rig: bpy.types.Object | bpy.types.Armature = track.id_data
         boneVisSuffix = ".hide"
         boneVisSuffixLen = len(boneVisSuffix)
         jointAnims: list[vis0.JointAnim] = []
@@ -1002,7 +1002,7 @@ class BRRESVisExporter(BRRESAnimExporter[vis0.VIS0]):
                 continue
             try:
                 # cut off ".hide" to get bone
-                bone: bpy.types.Bone = rigObj.path_resolve(dataPath[:-boneVisSuffixLen])
+                bone: bpy.types.Bone = rig.path_resolve(dataPath[:-boneVisSuffixLen])
                 if not isinstance(bone, bpy.types.Bone):
                     continue
             except ValueError:
@@ -1055,7 +1055,7 @@ class BRRESExporter():
         self.anims = {t: {} for t in (
             BRRESChrExporter, BRRESClrExporter, BRRESPatExporter, BRRESSrtExporter, BRRESVisExporter
         )}
-        includeMuted = settings.includeMutedAnims
+        useMuted = settings.includeMutedAnims
         if settings.includeUnusedImg:
             # export all images
             # (if this setting's disabled, image export is handled by model/anim exporters)
@@ -1065,18 +1065,24 @@ class BRRESExporter():
             # export armatures included in limit, as well as armature animations (chr/vis)
             if obj.type == 'ARMATURE' and limitIncludes(settings.limitTo, obj):
                 self._exportModel(obj)
-                if settings.doAnim and settings.includeArmAnims and obj.animation_data:
-                    for trk in obj.animation_data.nla_tracks:
-                        if trk.strips and trk.strips[0].action and (includeMuted or not trk.mute):
-                            self._exportAnim(BRRESChrExporter, trk)
-                            self._exportAnim(BRRESVisExporter, trk)
+                if settings.doAnim and settings.includeArmAnims:
+                    if obj.animation_data:
+                        for trk in obj.animation_data.nla_tracks:
+                            if trk.strips and trk.strips[0].action and (useMuted or not trk.mute):
+                                self._exportAnim(BRRESChrExporter, trk)
+                                self._exportAnim(BRRESVisExporter, trk)
+                    # vis animations can either be on armature objects or the armatures themselves
+                    if obj.data.animation_data:
+                        for trk in obj.data.animation_data.nla_tracks:
+                            if trk.strips and trk.strips[0].action and (useMuted or not trk.mute):
+                                self._exportAnim(BRRESVisExporter, trk)
         if settings.doAnim and settings.includeMatAnims:
             # finally, export material animations
             mats = {bpy.data.materials[mat] for mdl in self.models.values() for mat in mdl.mats}
             for mat in mats:
                 if mat.animation_data:
                     for trk in mat.animation_data.nla_tracks:
-                        if trk.strips and trk.strips[0].action and (includeMuted or not trk.mute):
+                        if trk.strips and trk.strips[0].action and (useMuted or not trk.mute):
                             self._exportAnim(BRRESClrExporter, trk)
                             self._exportAnim(BRRESPatExporter, trk)
                             self._exportAnim(BRRESSrtExporter, trk)
