@@ -1,5 +1,5 @@
 # standard imports
-from abc import abstractmethod, ABC
+from abc import abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum, Flag, auto
@@ -584,6 +584,7 @@ class DeformerArrayWriter(Writer["MDL0Writer", list[Deformer]]):
     def fromInstance(self, data: list[Deformer]):
         super().fromInstance(data)
         self.indices = {df: i for i, df in enumerate(data)}
+        return self
 
     def pack(self):
         joints = self.parentSer.getInstance().rootJoint.deepChildren()
@@ -592,94 +593,79 @@ class DeformerArrayWriter(Writer["MDL0Writer", list[Deformer]]):
         return self._struct.pack(len(self._data), *deformIdcs)
 
 
-class VertexAttrGroup(ABC):
+class VertexAttrGroup():
     """Group of items for some vertex attribute, like positions or normals."""
 
     ATTR_TYPE = gx.VertexAttr
-    _attr: ATTR_TYPE
 
-    def __init__(self, name: str = None, attr = None):
+    def __init__(self, name: str = None, arr: np.ndarray = None):
         self.name = name
-        self._attr = attr if attr is not None else self.ATTR_TYPE()
-        self._arr = np.ndarray((0, self._attr.ctype.ndims), self.dtype.fmt)
+        self.forceRaw = False
+        if arr is None:
+            self._arr = np.ndarray((0, self.ATTR_TYPE.PADDED_COUNT))
+        else:
+            self.setArr(arr)
 
     def __len__(self):
         return len(self._arr)
 
-    def arr(self, raw = False) -> np.ndarray:
-        """Copy of this group's data.
-
-        If "raw" is set to False, applicable conversions (e.g., scale) will be applied. Otherwise,
-        raw data will be returned."""
-        return self._arr.copy()
-
-    def setData(self, arr: np.ndarray, raw = False):
-        """Set this group's data.
-
-        If "raw" is set to False, applicable conversions (e.g., scale) will be applied. Otherwise,
-        the raw data will be used."""
-        if arr.shape[1] != self.ctype.ndims:
-            raise TypeError("Array and vertex attribute group must have the same component counts")
-        self._arr = arr.astype(self.dtype.fmt)
-
     @property
-    def ctype(self):
-        return self._attr.ctype
+    def arr(self):
+        """Vertex data for this group."""
+        return self._arr
 
-    @ctype.setter
-    def ctype(self, v: ATTR_TYPE.CompType):
-        # crop & pad array if necessary
-        self._arr = self._arr[:, :v.ndims]
-        padNeeded = v.ndims - self.ctype.ndims
-        if padNeeded > 0:
-            padding = np.zeros((self._arr.shape[0], padNeeded))
-            self._arr = np.concatenate((self._arr, padding), 1, dtype=self.dtype.fmt) # pylint: disable=unexpected-keyword-arg
-        # actually set ctype
-        self._attr.ctype = v
+    def setArr(self, arr: np.ndarray):
+        """Set this group's data with another array, which is copied.
 
-    @property
-    def dtype(self):
-        return self._attr.dtype
+        If its entries are too long (e.g., 4 elements when only 3 are supported), a ValueError is
+        raised. If entries are too short, they're padded to the proper length.
+        """
+        if arr.shape[-1] > self.ATTR_TYPE.PADDED_COUNT:
+            raise TypeError("Array vectors have too many components")
+        self._arr = self.ATTR_TYPE.pad(arr)
 
-    @dtype.setter
-    def dtype(self, v: ATTR_TYPE.DataType):
-        self._attr.dtype = v
-        self._arr = self._arr.astype(v.fmt)
-
-    def getAttr(self):
-        """Get a copy of this group's vertex attribute format."""
-        return self._attr.copy()
-
-    def copyAttrFrom(self, attr: ATTR_TYPE):
-        """Update this group's vertex attribute format based on another one."""
-        self._attr.copyFrom(attr)
+    def attr(self):
+        """GX vertex attribute descriptor for this group, generated based on its data."""
+        return self.ATTR_TYPE()
 
 
 class StdVertexAttrGroup(VertexAttrGroup):
     """Standard vertex attribute group template followed by most attribute types."""
     ATTR_TYPE = gx.StdVertexAttr
-    _attr: ATTR_TYPE
 
-    @property
-    def scale(self):
-        """Scale for this attribute. If type isn't float, data is stored scaled by (1 << scale)."""
-        return self._attr.scale
-
-    @scale.setter
-    def scale(self, v):
-        self._attr.scale = v
-
-    def arr(self, raw = False):
-        if self.dtype != gx.StdVertexAttr.DataType.FLOAT32 and not raw:
-            return super().arr().astype(np.float32) / (1 << self.scale)
-        else:
-            return super().arr()
-
-    def setData(self, arr: np.ndarray, raw = False):
-        if self.dtype != gx.StdVertexAttr.DataType.FLOAT32 and not raw:
-            super().setData((arr * (1 << self.scale)).astype(self.dtype.fmt))
-        else:
-            super().setData(arr)
+    def attr(self):
+        attr = super().attr()
+        if self.forceRaw:
+            return attr
+        arr = self._arr
+        arrMax = np.max(arr)
+        arrMin = np.min(arr)
+        isUnsigned = arrMin >= 0
+        dtypes = (
+            self.ATTR_TYPE.DataType.UINT8 if isUnsigned else self.ATTR_TYPE.DataType.INT8,
+            self.ATTR_TYPE.DataType.UINT16 if isUnsigned else self.ATTR_TYPE.DataType.INT16
+        )
+        for dtype in dtypes:
+            fmt = dtype.fmt
+            scale = 16
+            if arrMax > 0:
+                maxAllowed = np.iinfo(fmt).max
+                allowedScale = int(maxAllowed / arrMax).bit_length() - 1
+                if allowedScale == -1:
+                    continue
+                scale = min(scale, allowedScale)
+            if arrMin < 0:
+                minAllowed = np.iinfo(fmt).min
+                allowedScale = int(minAllowed / arrMin).bit_length() - 1
+                if allowedScale == -1:
+                    continue
+                scale = min(scale, allowedScale)
+            convertedArr = (arr * (1 << scale)).round().astype(fmt)
+            if np.allclose(arr, convertedArr / (1 << scale)):
+                attr.dtype = dtype
+                attr.scale = scale
+                break
+        return attr
 
 
 class VertexAttrGroupSerializer(Serializer[_MDL0_SER_T, VertexAttrGroup]):
@@ -689,14 +675,19 @@ class VertexAttrGroupSerializer(Serializer[_MDL0_SER_T, VertexAttrGroup]):
 
 class VertexAttrGroupReader(VertexAttrGroupSerializer["MDL0Reader"], Reader, StrPoolReadMixin):
 
+    def __init__(self, parent: "MDL0Reader" = None, offset = 0):
+        super().__init__(parent, offset)
+        self._attr: gx.VertexAttr = None
+
     def unpack(self, data: bytes):
         super().unpack(data)
         unpackedData = self._STRCT.unpack_from(data, self.offset)
         dataOffset = unpackedData[2] + self.offset
         self._data = self.DATA_TYPE()
-        attr = self._unpackAttr(unpackedData[5:9])
-        self._data.copyAttrFrom(attr)
-        self._data.setData(attr.unpackBuffer(data[dataOffset:], unpackedData[9]), raw=True)
+        self._attr = self._unpackAttr(unpackedData[5:9])
+        self._data.forceRaw = self._attr == self._data.ATTR_TYPE()
+        arr = self._attr.unpackBuffer(data[dataOffset:], unpackedData[9])
+        self._data.setArr(arr)
         return self
 
     def _updateInstance(self):
@@ -710,6 +701,10 @@ class VertexAttrGroupReader(VertexAttrGroupSerializer["MDL0Reader"], Reader, Str
 
 
 class VertexAttrGroupWriter(VertexAttrGroupSerializer["MDL0Writer"], Writer, StrPoolWriteMixin):
+
+    def __init__(self, parent: "MDL0Writer" = None, offset = 0):
+        super().__init__(parent, offset)
+        self._attr: gx.VertexAttr = None
 
     @property
     def offset(self):
@@ -728,7 +723,13 @@ class VertexAttrGroupWriter(VertexAttrGroupSerializer["MDL0Writer"], Writer, Str
         return self._STRCT.size
 
     def _calcSize(self):
-        return self._headSize() + pad(self._data.getAttr().calcBufferSize(len(self._data)), 32)
+        return super()._calcSize()
+
+    def fromInstance(self, data: VertexAttrGroup):
+        super().fromInstance(data)
+        self._attr = self._data.attr()
+        self._size = self._headSize() + pad(self._attr.calcBufferSize(len(self._data)), 32)
+        return self
 
     def _packHeader(self):
         """Pack the header of this group (up to its data)."""
@@ -737,7 +738,7 @@ class VertexAttrGroupWriter(VertexAttrGroupSerializer["MDL0Writer"], Writer, Str
                                 self.parentSer.itemIdx(self), *self._packAttr(), len(self._data))
 
     def pack(self):
-        return self._packHeader() + pad(self._data.getAttr().packBuffer(self._data.arr(True)), 32)
+        return self._packHeader() + pad(self._attr.packBuffer(self._data.arr), 32)
 
 
 class StdVertexAttrGroupReader(VertexAttrGroupReader):
@@ -750,8 +751,8 @@ class StdVertexAttrGroupReader(VertexAttrGroupReader):
 class StdVertexAttrGroupWriter(VertexAttrGroupWriter):
 
     def _packAttr(self):
-        group = self._data
-        return (group.ctype.value, group.dtype.value, group.scale, group.getAttr().stride)
+        attr: gx.StdVertexAttr = self._attr
+        return (attr.ctype.value, attr.dtype.value, attr.scale, attr.stride)
 
 
 class MinMaxVertexAttrGroupWriter(VertexAttrGroupWriter):
@@ -778,15 +779,25 @@ class MinMaxVertexAttrGroupWriter(VertexAttrGroupWriter):
         return super()._headSize() + self._MM_STRCT.size
 
     def _packHeader(self):
-        p = [0] * (self._data.ctype.maxDims() - self._data.ctype.ndims) # padding for min/max values
+        p = [0] * (self._attr.ctype.maxDims() - self._attr.ctype.count) # padding for min/max values
         packedHeader = super()._packHeader()
-        arr = self._data.arr() # min/max are based on processed (ie scaled) data, not raw data
+        arr = self._data.arr # min/max are based on processed (ie scaled) data, not raw data
         return packedHeader + self._MM_STRCT.pack(*arr.min(0), *p, *arr.max(0), *p)
 
 
 class PsnGroup(StdVertexAttrGroup):
     """Group of vertex positions."""
     ATTR_TYPE = gx.PsnAttr
+
+    def attr(self):
+        attr = super().attr()
+        if self.forceRaw:
+            return attr
+        arr = self._arr
+        padVal = attr.PAD_VAL
+        if np.allclose(arr[:, 2], padVal): # (else implicitly xyz)
+            attr.ctype = gx.PsnAttr.CompType.XY
+        return attr
 
 
 class PsnGroupReader(StdVertexAttrGroupReader):
@@ -801,9 +812,30 @@ class NrmGroup(StdVertexAttrGroup):
     """Group of vertex normals."""
     ATTR_TYPE = gx.NrmAttr
 
+    def __init__(self, name: str = None, arr: np.ndarray = None):
+        super().__init__(name, arr)
+        self.isNBT = False
+
+    def attr(self):
+        attr = super().attr()
+        if self.forceRaw:
+            return attr
+        arr = self._arr
+        if self.isNBT: # (else implicitly n)
+            if len(arr) == arr.size / 9:
+                attr.ctype = gx.NrmAttr.CompType.NBT
+            else:
+                attr.ctype = gx.NrmAttr.CompType.NBT_SPLIT
+        return attr
+
 
 class NrmGroupReader(StdVertexAttrGroupReader):
     DATA_TYPE = NrmGroup
+
+    def unpack(self, data: bytes):
+        super().unpack(data)
+        self._data.isNBT = self._attr.dtype is not gx.NrmAttr.CompType.N
+        return self
 
 
 class NrmGroupWriter(StdVertexAttrGroupWriter):
@@ -813,6 +845,25 @@ class NrmGroupWriter(StdVertexAttrGroupWriter):
 class ClrGroup(VertexAttrGroup):
     """Group of vertex colors."""
     ATTR_TYPE = gx.ClrAttr
+
+    def attr(self):
+        attr = super().attr()
+        if self.forceRaw:
+            return attr
+        arr = self._arr
+        padVal = attr.PAD_VAL
+        dtypes = gx.ClrAttr.DataType
+        if np.allclose(arr[:, 3], padVal): # rgb
+            if np.allclose(arr[:, :3], dtypes.RGB565.colorFmt.quantize(arr[:, :3])):
+                attr.dtype = dtypes.RGB565
+            else:
+                attr.dtype = dtypes.RGB8
+        else: # rgba
+            for dtype in (dtypes.RGBA4, dtypes.RGBA6):
+                if np.allclose(arr, dtype.colorFmt.quantize(arr)):
+                    attr.dtype = dtype
+                    break
+        return attr
 
 
 class ClrGroupReader(VertexAttrGroupReader):
@@ -827,13 +878,23 @@ class ClrGroupWriter(VertexAttrGroupWriter):
     DATA_TYPE = ClrGroup
 
     def _packAttr(self):
-        group = self._data
-        return (group.ctype.value, group.dtype.value, group.getAttr().stride, 0)
+        attr: gx.ClrAttr = self._attr
+        return (attr.ctype.value, attr.dtype.value, attr.stride, 0)
 
 
 class UVGroup(StdVertexAttrGroup):
     """Group of vertex UVs."""
     ATTR_TYPE = gx.UVAttr
+
+    def attr(self):
+        attr = super().attr()
+        if self.forceRaw:
+            return attr
+        arr = self._arr
+        padVal = attr.PAD_VAL
+        if np.allclose(arr[:, 1], padVal): # (else implicitly uv)
+            attr.ctype = gx.UVAttr.CompType.U
+        return attr
 
 
 class UVGroupReader(StdVertexAttrGroupReader):
@@ -1861,7 +1922,7 @@ class Mesh():
         for groups, defs in attrPairs:
             for i, g in groups.items():
                 d = defs[i]
-                d.fmt = g.getAttr()
+                d.fmt = g.attr()
                 d.dec = gx.StdAttrDec.IDX8 if len(g) <= maxBitVal(8) else gx.StdAttrDec.IDX16
                 # d.dec = gx.StdAttrDec.IDX16 if bigIdcs[attrIdx + i] else gx.StdAttrDec.IDX8
             # attrIdx += len(defs)

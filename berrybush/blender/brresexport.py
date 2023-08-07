@@ -11,7 +11,8 @@ import numpy as np
 from .common import ( # pylint: disable=unused-import
     MTX_TO_BONE, MTX_FROM_BONE, MTX_TO_BRRES, LOG_PATH,
     solidView, restoreView, limitIncludes, usedMatSlots, makeUniqueName, foreachGet, getLayerData,
-    getLoopVertIdcs, getLoopFaceIdcs, getFaceMatIdcs, getPropName, drawCheckedProp
+    getLoopVertIdcs, getLoopFaceIdcs, getFaceMatIdcs, getPropName, drawCheckedProp,
+    simplifyLayerData
 )
 from .material import AlphaSettings, DepthSettings, LightChannelSettings, MiscMatSettings
 from .tev import TevSettings, TevStageSettings
@@ -307,12 +308,7 @@ class BRRESMdlExporter():
             return None
         group = groupType(f"{layer.id_data.name}__{layer.name}")
         self.model.vertGroups[groupType].append(group)
-        ndims = group.ctype.ndims
-        # pad/crop data if wrong # of dimensions
-        paddedData = np.zeros((len(data), ndims))
-        data = data[:, :ndims]
-        paddedData[:, :data.shape[1]] = data
-        group.setData(paddedData)
+        group.setArr(data)
         return group
 
     def _getParentAndApplyTransform(self, mesh: bpy.types.Mesh, obj: bpy.types.Object):
@@ -427,12 +423,13 @@ class BRRESMdlExporter():
         psns, unqPsnInv = np.unique(psns, return_inverse=True, axis=0)
         psnGroup = mdl0.PsnGroup(mesh.name)
         self.model.vertGroups[mdl0.PsnGroup].append(psnGroup)
-        psnGroup.setData(psns)
+        psnGroup.setArr(psns)
         # generate normal group
+        nrms = simplifyLayerData(nrms)
         nrms, unqNrmInv = np.unique(nrms, return_inverse=True, axis=0)
         nrmGroup = mdl0.NrmGroup(mesh.name)
         self.model.vertGroups[mdl0.NrmGroup].append(nrmGroup)
-        nrmGroup.setData(nrms)
+        nrmGroup.setArr(nrms)
         # generate color & uv groups
         try:
             # brres mesh attributes may be deleted by modifiers, so try to get from original mesh

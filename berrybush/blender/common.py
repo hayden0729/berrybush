@@ -274,6 +274,7 @@ def getLayerData(mesh: bpy.types.Mesh, layerNames: tuple[str], isUV = False, uni
                     layerData = foreachGet(layer.data, "vector", layerCompCount)
         # then, process data & add to list
         if layerData is not None:
+            layerData = simplifyLayerData(layerData)
             if isUV: # flip uvs
                 layerData[:, 1] = 1 - layerData[:, 1]
             else: # clamp colors
@@ -282,3 +283,9 @@ def getLayerData(mesh: bpy.types.Mesh, layerNames: tuple[str], isUV = False, uni
                 layerData, layerIdcs = np.unique(layerData, return_inverse=True, axis=0)
         allData.append((layer, layerData, layerIdcs))
     return allData
+
+
+def simplifyLayerData(data: np.ndarray):
+    """Simplify data for a mesh attribute for the sake of file size optimization."""
+    scale = 1 << 14
+    return (data * scale).round() / scale
