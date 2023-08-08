@@ -44,7 +44,7 @@ ICONS: bpy.utils.previews.ImagePreviewCollection
 bl_info = {
     "name" : "BRRES format (BerryBush)",
     "author": "hayden0729",
-    "version": (1, 0, 0),
+    "version": (1, 1, 0),
     "blender" : (3, 3, 0),
     "location": "File > Import-Export",
     "description": "NSMBW focused BRRES support",
@@ -126,6 +126,8 @@ classes = (
     brresimport.ImportBRRES,
     brresexport.ExportBRRES,
     verify.VerifyBRRES,
+    updater.UpdateBRRES,
+    updater.UpdateVertColors1_1_0,
     # render engine
     render.BRRESRenderEngine
 )
@@ -150,11 +152,13 @@ def register():
     bpy.types.TOPBAR_MT_file_export.append(brresexport.drawOp)
     bpy.types.VIEW3D_MT_object.append(verify.drawOp)
     bpy.app.handlers.load_post.append(updater.update)
+    bpy.app.handlers.save_pre.append(updater.saveVer)
     render.BRRESRenderEngine.registerOnPanels()
 
 
 def unregister():
     render.BRRESRenderEngine.unregisterOnPanels()
+    bpy.app.handlers.save_pre.remove(updater.saveVer)
     bpy.app.handlers.load_post.remove(updater.update)
     bpy.types.VIEW3D_MT_object.remove(verify.drawOp)
     bpy.types.TOPBAR_MT_file_export.remove(brresexport.drawOp)
