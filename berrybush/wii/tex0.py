@@ -619,7 +619,8 @@ class TEX0Writer(TEX0Serializer, SubfileWriter):
         tex = self._data
         packedHeader = self._HEAD_STRCT.pack(self._CMN_STRCT.size + self._HEAD_STRCT.size,
                                              self.stringOffset(self._data.name) - self.offset,
-                                             0, *tex.dims, self._IMG_FORMATS.index(tex.fmt),
+                                             tex.isPaletteIndices, *tex.dims,
+                                             self._IMG_FORMATS.index(tex.fmt),
                                              len(tex.images), 0, tex.numMipmaps, 0, 0)
         packedData = b"".join(tex.fmt.exportImg(img) for img in tex.images)
         return super().pack() + packedHeader + packedData

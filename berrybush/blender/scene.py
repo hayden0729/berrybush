@@ -5,21 +5,11 @@ from .tev import TevSettings
 
 
 class SceneSettings(bpy.types.PropertyGroup):
-
-    # the version getter & setter setup here lets us use a default version retrieved from bl_info
-    # (we have to import in a function to prevent circular dependency)
-    # (we can't store the version here and then import it when creating bl_info because bl_info
-    # is parsed manually by blender or something and can't use variables for its fields)
-
-    def _getVer(self):
-        if self.version_ == (0, 0, 0):
-            from .. import bl_info # pylint: disable=import-outside-toplevel
-            self.version_ = bl_info["version"]
-        return self.version_
-
-    def _setVer(self, v: tuple[int, int, int]):
-        self.version_ = v
-
     tevConfigs: TevSettings.CustomIDCollectionProperty()
-    version_: bpy.props.IntVectorProperty(default=(0, 0, 0))
-    version: bpy.props.IntVectorProperty(get=_getVer, set=_setVer)
+    # version default of (0, 0, 0) just behaves as "most recent" & gets updated on blendfile save
+    # this is done because we want the default to be the most recent version, but can't do that
+    # directly because:
+    # 1) we can't import it from bl_info here because that would make a circular dependency
+    # 2) we can't store the version here and then import it when creating bl_info because bl_info
+    # is parsed manually by blender or something and seemingly can't use variables for its fields
+    version: bpy.props.IntVectorProperty(default=(0, 0, 0))

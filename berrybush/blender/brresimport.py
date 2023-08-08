@@ -392,6 +392,8 @@ class BRRESMdlImporter():
                         # get data for this group & add it to existing data, padding if necessary
                         # (if group doesn't have all dimensions stored, e.g., rgb instead of rgba)
                         groupData = group.arr.copy()
+                        if isinstance(group, mdl0.ClrGroup):
+                            groupData[:, :3] **= 2.2
                         try:
                             curSlotData = slotData[s]
                             # add offsets to commands to compensate for expanded vertex groups
@@ -1131,41 +1133,29 @@ class BRRESVisImporter(BRRESAnimImporter[vis0.VIS0]):
 
     def __init__(self, parentImporter: "BRRESImporter", anim: vis0.VIS0):
         super().__init__(parentImporter, anim)
-        jointAnims = {a.jointName: a for a in anim.jointAnims}
         forExist = parentImporter.settings.animsForExisting
-        objs = bpy.data.objects if forExist else (o.rigObj for o in parentImporter.models.values())
-        for rigObj in objs:
-            # create action for each model/armature that this anim could refer to
-            # for vis0 we should be able to just make one action and use it for all armatures,
-            # but armature actions have to be individual for the sake of chr0 :(
-            if rigObj.pose is None: # not an armature
-                continue
-            action = self._loadAction(anim, rigObj.name)
-            for bone in rigObj.data.bones:
-                try:
-                    jAnim = jointAnims[bone.name]
-                except KeyError:
-                    continue
-                # now, fill out action data for this bone
-                frames = np.logical_not(jAnim.frames)
-                frameIdcs = np.arange(len(frames)) + parentImporter.settings.frameStart
-                dataPath = "data." + bone.path_from_id("hide")
-                fc = action.fcurves.new(dataPath)
-                coords = np.stack((frameIdcs, frames), axis=-1)
-                mask = np.insert(coords[:-1, 1] != coords[1:, 1], 0, True) # remove duplicate frames
-                coords = coords[mask]
-                numKfs = len(coords)
-                fc.keyframe_points.add(numKfs)
-                fc.keyframe_points.foreach_set("co", coords.flatten())
-                constant = enumVal(bpy.types.Keyframe, "interpolation", 'CONSTANT')
-                fc.keyframe_points.foreach_set("interpolation", (constant, ) * numKfs)
-                fc.update()
-            if action.fcurves:
+        mdls = parentImporter.models.values()
+        arms = bpy.data.armatures if forExist else {mdl.rigObj.data for mdl in mdls}
+        action = self._loadAction(anim)
+        animatedBones = {jointAnim.jointName for jointAnim in anim.jointAnims}
+        for jointAnim in anim.jointAnims:
+            frames = np.logical_not(jointAnim.frames)
+            frameIdcs = np.arange(len(frames)) + parentImporter.settings.frameStart
+            dataPath = f"bones[\"{jointAnim.jointName}\"].hide"
+            fc = action.fcurves.new(dataPath)
+            coords = np.stack((frameIdcs, frames), axis=-1)
+            mask = np.insert(coords[:-1, 1] != coords[1:, 1], 0, True) # remove duplicate frames
+            coords = coords[mask]
+            numKfs = len(coords)
+            fc.keyframe_points.add(numKfs)
+            fc.keyframe_points.foreach_set("co", coords.flatten())
+            constant = enumVal(bpy.types.Keyframe, "interpolation", 'CONSTANT')
+            fc.keyframe_points.foreach_set("interpolation", (constant, ) * numKfs)
+            fc.update()
+        for arm in arms:
+            if any(bone.name in animatedBones for bone in arm.bones):
                 # if anything was generated, this model supports this animation, so create track
-                self._genTrack(rigObj, action, anim.name)
-            else:
-                # otherwise, delete the action we created
-                bpy.data.actions.remove(action)
+                self._genTrack(arm, action, anim.name)
 
 
 class BRRESImporter():

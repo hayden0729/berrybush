@@ -1058,7 +1058,7 @@ class TextureWriter(TextureSerializer["MaterialWriter"], Writer, StrPoolWriteMix
 
     def pack(self):
         tex = self._data
-        texIdx = self.parentSer.getInstance().textures.index(tex)
+        texIdx = next(i for i, t in enumerate(self.parentSer.getInstance().textures) if t is tex)
         return self._STRCT.pack(calcOffset(self.offset, self.stringOffset(self._data.imgName)),
                                 calcOffset(self.offset, self.stringOffset(self._data.pltName)),
                                 0, 0, texIdx, texIdx, *(m.value for m in tex.wrapModes),
