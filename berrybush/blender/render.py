@@ -719,7 +719,7 @@ class MainBRRESRenderer():
         mesh.calc_loop_triangles()
         mesh.calc_normals_split()
         # generate a batch for each material used
-        loopIdcs = foreachGet(mesh.loop_triangles, "loops", 3, np.integer)
+        loopIdcs = foreachGet(mesh.loop_triangles, "loops", 3, np.uint32)
         matIdcs = np.zeros(loopIdcs.shape)
         if len(mesh.materials) > 1: # lookup is wasteful if there's only one material
             matIdcs = getFaceMatIdcs(mesh)[getLoopFaceIdcs(mesh)][loopIdcs]

@@ -70,10 +70,10 @@ vec2 getTexCoord(GLSLTexture tex) {
         case 4:
         case 5:
         case 6:
-        case 7: {
+        case 7:
             int constUV = mesh.uvs[tex.mapMode];
             coord = vec3((constUV == -1) ? fragUV[tex.mapMode] : vec2(constUV), 1);
-        }; break;
+            break;
         case 8: coord.st = (clipSpace.xy / clipSpace.w / 2 + .5); break; // projection mapping
         case 9: // environment mapping
         case 10:
