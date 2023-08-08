@@ -391,7 +391,7 @@ class BRRESMdlImporter():
                     for s, group in slots.items():
                         # get data for this group & add it to existing data, padding if necessary
                         # (if group doesn't have all dimensions stored, e.g., rgb instead of rgba)
-                        groupData = group.getAttr().pad(group.arr())
+                        groupData = group.arr.copy()
                         if isinstance(group, mdl0.ClrGroup):
                             groupData[:, :3] **= 2.2
                         try:

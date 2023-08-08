@@ -147,7 +147,7 @@ def getLoopAttrs(mesh: bpy.types.Mesh, clrs: list[str] = None, uvs: list[str] = 
         for i, (layer, layerData, layerIdcs) in enumerate(aLayerData):
             # format data & add to dict
             if layer is not None:
-                paddedData = np.full((numLoops, aType.PADDED_DIMS), aType.PAD_VAL, dtype=np.float32)
+                paddedData = np.full((numLoops, aType.PADDED_COUNT), aType.PAD_VAL, np.float32)
                 # get data in per-loop domain, regardless of original domain
                 try:
                     if layer.domain == 'POINT':
@@ -161,7 +161,7 @@ def getLoopAttrs(mesh: bpy.types.Mesh, clrs: list[str] = None, uvs: list[str] = 
                 except AttributeError:
                     pass # this is a uv layer, which implicity has per-loop (corner) domain
                 # pad/crop data if it has the wrong number of components
-                layerData = layerData[:, :aType.PADDED_DIMS]
+                layerData = layerData[:, :aType.PADDED_COUNT]
                 paddedData[:, :layerData.shape[1]] = layerData
                 if aTypeName == "color":
                     paddedData[:, :3] **= (1 / 2.2)

@@ -290,6 +290,7 @@ def getLayerData(mesh: bpy.types.Mesh, layerNames: tuple[str],
         # then, process data & add to list
         if layerData is not None:
             if doProcessing:
+                layerData = simplifyLayerData(layerData)
                 if isUV: # flip uvs
                     layerData[:, 1] = 1 - layerData[:, 1]
                 else: # clamp colors
@@ -313,3 +314,9 @@ def setLayerData(layerData: dict[bpy.types.Attribute, np.ndarray]):
                 pass
     for mesh in meshes:
         mesh.update()
+
+
+def simplifyLayerData(data: np.ndarray):
+    """Simplify data for a mesh attribute for the sake of file size optimization."""
+    scale = 1 << 14
+    return (data * scale).round() / scale

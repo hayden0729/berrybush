@@ -369,6 +369,10 @@ class ColorFormat():
         """Return a denormalized copy of a color list based on the max value for each channel."""
         return data * self._maxs
 
+    def quantize(self, data: np.ndarray):
+        """Return a copy of a normalized color list with this format's precision limits applied."""
+        return self.normalize(self.denormalize(data).round())
+
     def unpack(self, b: bytes, count = -1):
         """Unpack a list of colors from bytes."""
         data: np.ndarray = None
@@ -387,7 +391,7 @@ class ColorFormat():
         data = data.round().astype(self._dtype) << self._shifts
         data = np.bitwise_or.reduce(data, 1).astype(self._dtype)
         if self.stride == 3: # if stride is 3, we need to pack individual bytes
-            data = (data >> np.arange(16, -1, -8)).astype(np.uint8)
+            data = (data.reshape(-1, 1) >> np.arange(16, -1, -8)).astype(np.uint8)
         return data.tobytes()
 
 
@@ -424,19 +428,19 @@ class VertexAttr(Generic[_COMP_T, _DATA_T]):
     """
 
     MAX_ATTRS: int
-    PADDED_DIMS: int
+    PADDED_COUNT: int
     PAD_VAL: int
 
     class CompType(BitEnum, EnumWithAttr):
         """Describes a vertex attribute component type, with a name and number of dimensions."""
         @cached_property
-        def ndims(self) -> int:
+        def count(self) -> int:
             return self._attr_
         @classmethod
         @cache
         def maxDims(cls):
             """Maximum allowed dimensions for this attribute type."""
-            return max(e.ndims for e in cls)
+            return max(e.count for e in cls)
 
     class DataType(BitEnum, EnumWithAttr):
         """Describes a vertex attribute data type (e.g., 16-bit int, 32-bit float, etc.)."""
@@ -464,7 +468,7 @@ class VertexAttr(Generic[_COMP_T, _DATA_T]):
 
     @abstractmethod
     def unpackBuffer(self, b: bytes, count: int) -> np.ndarray:
-        """Unpack an array of data following this format from bytes."""
+        """Unpack an array of data from bytes following this format."""
 
     def calcBufferSize(self, count: int) -> int:
         """Get the size in bytes of data following this format, given the number of entries."""
@@ -472,7 +476,7 @@ class VertexAttr(Generic[_COMP_T, _DATA_T]):
 
     @abstractmethod
     def packBuffer(self, arr: np.ndarray) -> bytes:
-        """Pack an array of data following this format to bytes."""
+        """Pack an array of data to bytes following this format."""
 
     def copy(self):
         """Return a copy of this vertex attribute format."""
@@ -486,8 +490,11 @@ class VertexAttr(Generic[_COMP_T, _DATA_T]):
     def pad(cls, data: np.ndarray) -> np.ndarray:
         """Pad a numpy array's last axis to the standard length for this attribute type."""
         padWidths = [(0, 0)] * data.ndim
-        padWidths[-1] = (0, cls.PADDED_DIMS - data.shape[-1])
+        padWidths[-1] = (0, cls.PADDED_COUNT - data.shape[-1])
         return np.pad(data, padWidths, constant_values=cls.PAD_VAL)
+
+    def __eq__(self, other: Self):
+        return self.dtype == other.dtype and self.ctype == other.ctype
 
 
 class StdVertexAttr(VertexAttr[_COMP_T, "StdVertexAttr.DataType"]):
@@ -543,14 +550,24 @@ class StdVertexAttr(VertexAttr[_COMP_T, "StdVertexAttr.DataType"]):
 
     @property
     def stride(self):
-        return self.dtype.fmt.itemsize * self.ctype.ndims
+        return self.dtype.fmt.itemsize * self.ctype.count
 
     def unpackBuffer(self, b: bytes, count: int):
-        ndims = self.ctype.ndims
-        return np.frombuffer(b, self.dtype.fmt, count * ndims).reshape(count, ndims)
+        compCount = self.ctype.count
+        unpacked = np.frombuffer(b, self.dtype.fmt, count * compCount).reshape(count, compCount)
+        if self.dtype is not self.DataType.FLOAT32:
+            unpacked = unpacked / (1 << self.scale)
+        return self.pad(unpacked)
 
     def packBuffer(self, arr: np.ndarray):
-        return arr.tobytes()
+        # arrays may have more than 2 dimensions (in case of nbt normals),
+        # but shape[0] is always # of entries and shape[1:] always sums to # of components
+        # so, use reshaping & then trim based on desired component count
+        compCount = self.ctype.count
+        packed = np.ascontiguousarray(arr.reshape(len(arr), -1)[:, :compCount])
+        if self.dtype is not self.DataType.FLOAT32:
+            packed = np.round(packed * (1 << self.scale))
+        return packed.astype(self.dtype.fmt).tobytes()
 
     def copy(self):
         return type(self)(self._dtype, self._ctype, self.scale)
@@ -560,10 +577,13 @@ class StdVertexAttr(VertexAttr[_COMP_T, "StdVertexAttr.DataType"]):
         self.ctype = other.ctype
         self.scale = other.scale
 
+    def __eq__(self, other: Self):
+        return super().__eq__(other) and self.scale == other.scale
+
 
 class PsnAttr(StdVertexAttr["PsnAttr.CompType"]):
     MAX_ATTRS = MAX_PSN_ATTRS
-    PADDED_DIMS = 3
+    PADDED_COUNT = 3
     ctype: "CompType"
     class CompType(VertexAttr.CompType):
         XY = 0, 2
@@ -574,7 +594,7 @@ class PsnAttr(StdVertexAttr["PsnAttr.CompType"]):
 
 class NrmAttr(StdVertexAttr["NrmAttr.CompType"]):
     MAX_ATTRS = MAX_NRM_ATTRS
-    PADDED_DIMS = 3
+    PADDED_COUNT = 3
     ctype: "CompType"
     class CompType(VertexAttr.CompType):
         N = 0, 3 # normal vector, xyz
@@ -590,7 +610,7 @@ class NrmAttr(StdVertexAttr["NrmAttr.CompType"]):
 class ClrAttr(VertexAttr["ClrAttr.CompType", "ClrAttr.DataType"]):
 
     MAX_ATTRS = MAX_CLR_ATTRS
-    PADDED_DIMS = 4
+    PADDED_COUNT = 4
     PAD_VAL = 1
 
     ctype: "CompType"
@@ -636,21 +656,21 @@ class ClrAttr(VertexAttr["ClrAttr.CompType", "ClrAttr.DataType"]):
 
     def unpackBuffer(self, b: bytes, count: int):
         colorFmt = self._dtype.colorFmt
-        return colorFmt.normalize(colorFmt.unpack(b, count))
+        return self.pad(colorFmt.normalize(colorFmt.unpack(b, count)))
 
     def packBuffer(self, arr: np.ndarray):
         colorFmt = self._dtype.colorFmt
-        return colorFmt.pack(colorFmt.denormalize(arr))
+        return colorFmt.pack(colorFmt.denormalize(arr[:, :colorFmt.nchans]))
 
 
 class UVAttr(StdVertexAttr["UVAttr.CompType"]):
     MAX_ATTRS = MAX_UV_ATTRS
-    PADDED_DIMS = 2
+    PADDED_COUNT = 2
     ctype: "CompType"
     class CompType(VertexAttr.CompType):
-        S = 0, 1
-        ST = 1, 2
-    def __init__(self, dtype = StdVertexAttr.DataType.FLOAT32, ctype = CompType.ST, scale = 0):
+        U = 0, 1
+        UV = 1, 2
+    def __init__(self, dtype = StdVertexAttr.DataType.FLOAT32, ctype = CompType.UV, scale = 0):
         super().__init__(dtype, ctype, scale)
 
 
@@ -797,7 +817,7 @@ class VertexFmt0(CPReg["VertexFmt0.ValStruct"]):
         _clrDType0 = Bits(3, ClrAttr.DataType, ClrAttr.DataType.RGB565)
         _clrCType1 = Bits(1, ClrAttr.CompType, ClrAttr.CompType.RGB)
         _clrDType1 = Bits(3, ClrAttr.DataType, ClrAttr.DataType.RGB565)
-        _uvCType0 = Bits(1, UVAttr.CompType, UVAttr.CompType.ST)
+        _uvCType0 = Bits(1, UVAttr.CompType, UVAttr.CompType.UV)
         _uvDType0 = Bits(3, UVAttr.DataType, UVAttr.DataType.UINT8)
         _uvScale0 = Bits(5, int)
         # if false, divisor is ignored for int8/uint8
@@ -857,16 +877,16 @@ class VertexFmt1(CPReg["VertexFmt1.ValStruct"]):
 
     bits: "ValStruct"
     class ValStruct(CPReg.ValStruct):
-        _uvCType1 = Bits(1, UVAttr.CompType, UVAttr.CompType.ST)
+        _uvCType1 = Bits(1, UVAttr.CompType, UVAttr.CompType.UV)
         _uvDType1 = Bits(3, UVAttr.DataType, UVAttr.DataType.UINT8)
         _uvScale1 = Bits(5, int)
-        _uvCType2 = Bits(1, UVAttr.CompType, UVAttr.CompType.ST)
+        _uvCType2 = Bits(1, UVAttr.CompType, UVAttr.CompType.UV)
         _uvDType2 = Bits(3, UVAttr.DataType, UVAttr.DataType.UINT8)
         _uvScale2 = Bits(5, int)
-        _uvCType3 = Bits(1, UVAttr.CompType, UVAttr.CompType.ST)
+        _uvCType3 = Bits(1, UVAttr.CompType, UVAttr.CompType.UV)
         _uvDType3 = Bits(3, UVAttr.DataType, UVAttr.DataType.UINT8)
         _uvScale3 = Bits(5, int)
-        _uvCType4 = Bits(1, UVAttr.CompType, UVAttr.CompType.ST)
+        _uvCType4 = Bits(1, UVAttr.CompType, UVAttr.CompType.UV)
         _uvDType4 = Bits(3, UVAttr.DataType, UVAttr.DataType.UINT8)
         _pad = Bits(1, bool, 1)
         uvCTypes = alias("_uvCType1", "_uvCType2", "_uvCType3", "_uvCType4")
@@ -896,13 +916,13 @@ class VertexFmt2(CPReg["VertexFmt2.ValStruct"]):
     bits: "ValStruct"
     class ValStruct(CPReg.ValStruct):
         _uvScale4 = Bits(5, int)
-        _uvCType5 = Bits(1, UVAttr.CompType, UVAttr.CompType.ST)
+        _uvCType5 = Bits(1, UVAttr.CompType, UVAttr.CompType.UV)
         _uvDType5 = Bits(3, UVAttr.DataType, UVAttr.DataType.UINT8)
         _uvScale5 = Bits(5, int)
-        _uvCType6 = Bits(1, UVAttr.CompType, UVAttr.CompType.ST)
+        _uvCType6 = Bits(1, UVAttr.CompType, UVAttr.CompType.UV)
         _uvDType6 = Bits(3, UVAttr.DataType, UVAttr.DataType.UINT8)
         _uvScale6 = Bits(5, int)
-        _uvCType7 = Bits(1, UVAttr.CompType, UVAttr.CompType.ST)
+        _uvCType7 = Bits(1, UVAttr.CompType, UVAttr.CompType.UV)
         _uvDType7 = Bits(3, UVAttr.DataType, UVAttr.DataType.UINT8)
         _uvScale7 = Bits(5, int)
         uvCTypes = alias("_uvCType5", "_uvCType6", "_uvCType7")
