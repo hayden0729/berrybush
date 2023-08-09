@@ -832,7 +832,7 @@ class BRRESClrExporter(BRRESAnimExporter[clr0.CLR0]):
             frameVals = [fcurve.evaluate(frameIdx) for frameIdx in frameRange]
             # grab existing reg animation or create new one if necessary, then add new data
             # note that clr0 animations aren't keyframed, so we must start at the initial frame
-            # this means if the animation already exists, if the animation for this component is
+            # this means if the animation already exists, and the animation for this component is
             # longer than what already exists, we just extend it using np.pad()
             regAnim = matAnim.allRegs[regIdx]
             if regAnim is None:
@@ -841,9 +841,11 @@ class BRRESClrExporter(BRRESAnimExporter[clr0.CLR0]):
             regAnim.mask[fcurve.array_index] = 0
             colors = regAnim.normalized
             curLen = len(colors)
-            extendMode = "edge" if curLen > 0 else "constant"
-            colors = np.pad(colors, ((0, len(frameVals) - len(colors)), (0, 0)), extendMode)
-            colors[:, fcurve.array_index] = np.reshape(frameVals, (1, -1))
+            newLen = len(frameVals)
+            if newLen > curLen:
+                extendMode = "edge" if curLen > 0 else "constant"
+                colors = np.pad(colors, ((0, newLen - curLen), (0, 0)), extendMode)
+            colors[:newLen, fcurve.array_index] = np.reshape(frameVals, (1, -1))
             regAnim.normalized = colors
         # if mat anim is non-empty (relevant fcurves were found), update clr anim
         if any(reg is not None for reg in matAnim.allRegs):
@@ -1055,7 +1057,6 @@ class BRRESExporter():
         self.anims = {t: {} for t in (
             BRRESChrExporter, BRRESClrExporter, BRRESPatExporter, BRRESSrtExporter, BRRESVisExporter
         )}
-        useMuted = settings.includeMutedAnims
         if settings.includeUnusedImg:
             # export all images
             # (if this setting's disabled, image export is handled by model/anim exporters)
@@ -1067,25 +1068,28 @@ class BRRESExporter():
                 self._exportModel(obj)
                 if settings.doAnim and settings.includeArmAnims:
                     if obj.animation_data:
-                        for trk in obj.animation_data.nla_tracks:
-                            if trk.strips and trk.strips[0].action and (useMuted or not trk.mute):
-                                self._exportAnim(BRRESChrExporter, trk)
-                                self._exportAnim(BRRESVisExporter, trk)
+                        usedNames = set()
+                        for track in obj.animation_data.nla_tracks:
+                            if self.testAnimTrack(track, usedNames):
+                                self._exportAnim(BRRESChrExporter, track)
+                                self._exportAnim(BRRESVisExporter, track)
                     # vis animations can either be on armature objects or the armatures themselves
                     if obj.data.animation_data:
-                        for trk in obj.data.animation_data.nla_tracks:
-                            if trk.strips and trk.strips[0].action and (useMuted or not trk.mute):
-                                self._exportAnim(BRRESVisExporter, trk)
+                        usedNames = set()
+                        for track in obj.data.animation_data.nla_tracks:
+                            if self.testAnimTrack(track, usedNames):
+                                self._exportAnim(BRRESVisExporter, track)
         if settings.doAnim and settings.includeMatAnims:
             # finally, export material animations
             mats = {bpy.data.materials[mat] for mdl in self.models.values() for mat in mdl.mats}
             for mat in mats:
                 if mat.animation_data:
-                    for trk in mat.animation_data.nla_tracks:
-                        if trk.strips and trk.strips[0].action and (useMuted or not trk.mute):
-                            self._exportAnim(BRRESClrExporter, trk)
-                            self._exportAnim(BRRESPatExporter, trk)
-                            self._exportAnim(BRRESSrtExporter, trk)
+                    usedNames = set()
+                    for track in mat.animation_data.nla_tracks:
+                        if self.testAnimTrack(track, usedNames):
+                            self._exportAnim(BRRESClrExporter, track)
+                            self._exportAnim(BRRESPatExporter, track)
+                            self._exportAnim(BRRESSrtExporter, track)
         if not settings.doArmGeo:
             # if armature/geometry export is disabled, for now, just delete models before packing
             # (reason being that models are still needed for animation export; this could be
@@ -1132,6 +1136,15 @@ class BRRESExporter():
 
     def _exportAnim(self, t: type[BRRESAnimExporter], track: bpy.types.NlaTrack):
         t(self, track)
+
+    def testAnimTrack(self, track: bpy.types.NlaTrack, usedNames: set[str]):
+        """Determine if an NLA track should be used for BRRES export."""
+        if self.settings.includeMutedAnims or not track.mute:
+            if track.strips and track.strips[0].action:
+                if track.name not in usedNames:
+                    usedNames.add(track.name)
+                    return True
+        return False
 
     def getLocalSRT(self, bone: bpy.types.PoseBone, localScales: dict[bpy.types.Bone, Vector],
                     boneMtcs: dict[bpy.types.PoseBone, tuple[Matrix, Matrix]]):
