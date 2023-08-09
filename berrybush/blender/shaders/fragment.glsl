@@ -81,8 +81,10 @@ vec2 getTexCoord(GLSLTexture tex) {
         case 12: // colors
         case 13: coord = getLightChanColor(tex.mapMode - 12).stp; break;
     }
-    if (9 <= tex.mapMode && tex.mapMode < 12) {
-        coord = normalize(normalMtx * coord) / 2 + .5; // TODO: env light & env spec
+    if (8 <= tex.mapMode && tex.mapMode < 12) { // TODO: env light & env spec
+        if (9 <= tex.mapMode) {
+            coord = normalize(normalMtx * coord) / 2 + .5;
+        }
         coord.t = 1 - coord.t; // switch to brres convention before texture matrix multiplication
     }
     coord.st = vec3(coord.st, 1) * tex.mtx;
