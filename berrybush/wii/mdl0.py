@@ -779,10 +779,8 @@ class MinMaxVertexAttrGroupWriter(VertexAttrGroupWriter):
         return super()._headSize() + self._MM_STRCT.size
 
     def _packHeader(self):
-        p = [0] * (self._attr.ctype.maxDims() - self._attr.ctype.count) # padding for min/max values
-        packedHeader = super()._packHeader()
-        arr = self._data.arr # min/max are based on processed (ie scaled) data, not raw data
-        return packedHeader + self._MM_STRCT.pack(*arr.min(0), *p, *arr.max(0), *p)
+        arr = self._data.arr
+        return super()._packHeader() + self._MM_STRCT.pack(*arr.min(0), *arr.max(0))
 
 
 class PsnGroup(StdVertexAttrGroup):
