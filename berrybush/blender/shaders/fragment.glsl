@@ -232,10 +232,10 @@ vec4 getTevOutput() {
                 calcOutput = clamp(calcOutput, vec3(0.0), vec3(1.0));
             }
             if (isAlpha) {
-                outputColors[params.outputIdx].a = calcOutput[0];
+                outputColors[params.outputIdx] = vec4(outputColors[params.outputIdx].rgb, calcOutput[0]);
             }
             else {
-                outputColors[params.outputIdx].rgb = calcOutput;
+                outputColors[params.outputIdx] = vec4(calcOutput, outputColors[params.outputIdx].a);
             }
         }
     }
