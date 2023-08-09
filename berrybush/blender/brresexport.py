@@ -423,7 +423,7 @@ class BRRESMdlExporter():
             nrms = np.einsum("ij, ijk->ik", nrms, vertDfMtcs[loopVertIdcs, :3, :3])
         # generate position group
         psns, unqPsnInv = np.unique(psns, return_inverse=True, axis=0)
-        psnGroup = mdl0.PsnGroup(mesh.name)
+        psnGroup = mdl0.PsnGroup(obj.name)
         self.model.vertGroups[mdl0.PsnGroup].append(psnGroup)
         psnGroup.setArr(psns)
         # generate normal group
