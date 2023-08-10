@@ -122,7 +122,7 @@ class BRRESMdlImporter():
 
     def _importTex(self, texSettings: TexSettings, tex: mdl0.Texture):
         # image
-        if tex.imgName:
+        try:
             blendImgName = self.parentImporter.images[(tex.imgName, tex.pltName)]
             texSettings.imgs.add(False).img = bpy.data.images[blendImgName]
             # name texture after image
@@ -134,6 +134,8 @@ class BRRESMdlImporter():
             if imgName[dotIdx + 1:].isdigit():
                 imgName = imgName[:dotIdx]
             texSettings.name = imgName
+        except KeyError:
+            pass # no image (or invalid)
         # texture
         t = texSettings.transform
         t.scale, t.rotation, t.translation = tex.scale, np.deg2rad(tex.rot), tex.trans
@@ -1248,10 +1250,13 @@ class BRRESImporter():
                                 frameIdx, texImgSlot = kf.co
                                 kf.co = (frameIdx, texImgMap[texImgSlot - 1] + 1)
             # now, add the actual texture images within the materials
+            # (and adjust the rest action if the original is moved)
             names = {n for m in self.models.values() for mt, n in m.mats.items() if mt.name == name}
             for blendName in names: # for each blender material corresponding to this brres mat name
                 mat = bpy.data.materials[blendName]
                 textures = mat.brres.textures
+                restAction = mat.animation_data.action
+                restFCurves = {fc.data_path: fc for fc in restAction.fcurves}
                 for texIdx, sortedTexImgs in slotSortMap.items():
                     texImgSlots = matTexImgSlots[texIdx]
                     tex = textures[texIdx]
@@ -1262,16 +1267,18 @@ class BRRESImporter():
                     # make the new version the active one and remove the original
                     # if it hasn't, move it to the end so that the fcurves will work
                     # (but keep it active)
+                    # also, adjust for this removal or movement in the rest action
                     originalImg = texImgs[0].img
+                    restFc = restFCurves[f"brres.textures.coll_[{texIdx}].activeImgSlot"]
                     if originalImg and originalImg.name in texImgSlots:
-                        newIdx = texImgSlots.index(originalImg.name)
+                        newIdx = sortedTexImgs[texImgSlots.index(originalImg.name)]
                         texImgs.remove(texImgs.activeIdx)
                         texImgs.activeIdx = newIdx
-                        tex.activeImgSlot = newIdx + 1
+                        restFc.keyframe_points[0].co[1] = newIdx + 1
                     else:
                         newIdx = len(texImgs) - 1
                         texImgs.move(0, newIdx)
-                        tex.activeImgSlot = newIdx + 1
+                        restFc.keyframe_points[0].co[1] = newIdx + 1
 
     def _loadModel(self, model: mdl0.MDL0):
         self.models[model] = BRRESMdlImporter(self, model)
