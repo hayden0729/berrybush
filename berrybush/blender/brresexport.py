@@ -647,18 +647,27 @@ class BRRESAnimExporter(Generic[ANIM_SUBFILE_T]):
         self.parentExporter = parentExporter
         self.track = track
 
-    def getAnim(self, name: str) -> ANIM_SUBFILE_T:
+    def getAnim(self, name: str, action: bpy.types.Action) -> ANIM_SUBFILE_T:
         """Get an animation of this exporter's type from its parent BRRES exporter by name.
 
         If the requested animation doesn't exist yet, a new one is created.
+
+        In either case, its length and looping flag are updated based on its current settings & 
+        the provided action.
         """
         try:
-            return self.parentExporter.anims[type(self)][name]
+            anim = self.parentExporter.anims[type(self)][name]
         except KeyError:
             anim = self.ANIM_TYPE(name)
             self.parentExporter.anims[type(self)][name] = anim
             self.parentExporter.res.folder(self.ANIM_TYPE).append(anim)
-            return anim
+        anim.enableLoop = action.use_cyclic
+        # add 1 as brres "length" is number of frames (including both endpoints),
+        # as opposed to length of frame span (which doesn't include one endpoint, and is what
+        # we have here)
+        newLen = int(np.ceil(action.frame_range[1] + 1 - self.parentExporter.settings.frameStart))
+        anim.length = max(anim.length, newLen)
+        return anim
 
 
 class BRRESChrExporter(BRRESAnimExporter[chr0.CHR0]):
@@ -750,9 +759,7 @@ class BRRESChrExporter(BRRESAnimExporter[chr0.CHR0]):
             frameVals = jointFrames[bone]
             frameVals[lastNewFrameIdx:] = frameVals[lastNewFrameIdx]
         # create chr0
-        chrAnim = self.getAnim(track.name)
-        chrAnim.enableLoop = action.use_cyclic
-        chrAnim.length = max(chrAnim.length, int(np.ceil(frameEnd - settings.frameStart)))
+        chrAnim = self.getAnim(track.name, action)
         usedJointNames = {jointAnim.jointName for jointAnim in chrAnim.jointAnims}
         jointAnims: dict[bpy.types.PoseBone, chr0.JointAnim] = {}
         for bone, frameVals in jointFrames.items():
@@ -852,9 +859,7 @@ class BRRESClrExporter(BRRESAnimExporter[clr0.CLR0]):
             regAnim.normalized = colors
         # if mat anim is non-empty (relevant fcurves were found), update clr anim
         if any(reg is not None for reg in matAnim.allRegs):
-            clrAnim = self.getAnim(track.name)
-            clrAnim.enableLoop = action.use_cyclic
-            clrAnim.length = max(clrAnim.length, int(np.ceil(action.frame_range[1] - frameStart)))
+            clrAnim = self.getAnim(track.name, action)
             clrAnim.matAnims.append(matAnim)
 
 
@@ -906,9 +911,7 @@ class BRRESPatExporter(BRRESAnimExporter[pat0.PAT0]):
             texAnim.keyframes = np.array([frameIdcs, frameVals, [0] * len(frameIdcs)]).T
         # if mat anim is non-empty (relevant fcurves were found), update pat anim
         if matAnim.texAnims:
-            patAnim = self.getAnim(track.name)
-            patAnim.enableLoop = action.use_cyclic
-            patAnim.length = max(patAnim.length, int(np.ceil(action.frame_range[1] - frameStart)))
+            patAnim = self.getAnim(track.name, action)
             patAnim.matAnims.append(matAnim)
 
 
@@ -981,9 +984,7 @@ class BRRESSrtExporter(BRRESAnimExporter[srt0.SRT0]):
             compAnim.keyframes = np.array([frameIdcs, frameVals, [0] * len(frameIdcs)]).T
         # if mat anim is non-empty (relevant fcurves were found), update srt anim
         if matAnim.texAnims or matAnim.indAnims:
-            srtAnim = self.getAnim(track.name)
-            srtAnim.enableLoop = action.use_cyclic
-            srtAnim.length = max(srtAnim.length, int(np.ceil(action.frame_range[1] - frameStart)))
+            srtAnim = self.getAnim(track.name, action)
             srtAnim.mtxGen = tf.MayaMtxGen2D
             srtAnim.matAnims.append(matAnim)
 
@@ -1019,9 +1020,7 @@ class BRRESVisExporter(BRRESAnimExporter[vis0.VIS0]):
             jointAnim.frames = np.logical_not([fcurve.evaluate(i) for i in frameRange], dtype=bool)
         # if any joint anims were created, add to vis0 (creating if it doesn't already exist)
         if jointAnims:
-            visAnim = self.getAnim(track.name)
-            visAnim.enableLoop = action.use_cyclic
-            visAnim.length = max(visAnim.length, int(np.ceil(action.frame_range[1] - frameStart)))
+            visAnim = self.getAnim(track.name, action)
             # only add joint anims w/ names not already in vis0
             usedJointNames: set[str] = set()
             combinedAnims = visAnim.jointAnims + jointAnims

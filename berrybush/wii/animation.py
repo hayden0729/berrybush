@@ -481,6 +481,7 @@ class AnimSubfile(Subfile):
     def __init__(self, name: str = None, version = -1):
         super().__init__(name, version)
         self.length: int = 0
+        """Number of frames in this animation, including both endpoints (frame span + 1)."""
         self.enableLoop: bool = False
 
 

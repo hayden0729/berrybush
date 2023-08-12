@@ -799,7 +799,10 @@ class BRRESAnimImporter(Generic[ANIM_SUBFILE_T]):
             action.use_fake_user = True
             action.use_frame_range = True
             action.frame_start = self.parentImporter.settings.frameStart
-            action.frame_end = action.frame_start + animSubfile.length
+            # subtract 1 as brres "length" is number of frames (including both endpoints),
+            # as opposed to length of frame span (which doesn't include one endpoint, and is what
+            # we want here)
+            action.frame_end = action.frame_start + animSubfile.length - 1
             action.use_cyclic = animSubfile.enableLoop
             return action
 
