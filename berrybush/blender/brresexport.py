@@ -17,8 +17,11 @@ from .common import ( # pylint: disable=unused-import
 from .material import AlphaSettings, DepthSettings, LightChannelSettings, MiscMatSettings
 from .tev import TevSettings, TevStageSettings
 from .texture import TexSettings
+from .updater import addonVer, verStr
 from .verify import verifyBRRES
-from ..wii import animation, brres, chr0, clr0, gx, mdl0, pat0, srt0, tex0, transform as tf, vis0
+from ..wii import (
+    animation, binaryutils, brres, chr0, clr0, gx, mdl0, pat0, srt0, tex0, transform as tf, vis0
+)
 
 
 ANIM_SUBFILE_T = TypeVar("ANIM_SUBFILE_T", bound=animation.AnimSubfile)
@@ -1099,9 +1102,9 @@ class BRRESExporter():
         # write file
         self.res.sort()
         packed = self.res.pack()
-        padSize = settings.padSize * int(settings.padUnit) - len(packed) # pad size in bytes
-        if settings.padEnable and padSize > 0:
-            packed += bytearray(padSize)
+        packed += binaryutils.pad(f"BerryBush {verStr(addonVer())}".encode("ascii"), 16)
+        if settings.padEnable:
+            packed = binaryutils.pad(packed, settings.padSize * int(settings.padUnit))
         # copy = brres.BRRES.unpack(packed)
         file.write(packed)
 

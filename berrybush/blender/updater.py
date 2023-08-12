@@ -13,11 +13,21 @@ def update(_):
 @bpy.app.handlers.persistent
 def saveVer(_):
     """Before saving, update the BerryBush version for every scene in the Blend file."""
-    # this is all needed for the version setup descriped in scene.py
-    from .. import bl_info # pylint: disable=import-outside-toplevel
-    latestVer = bl_info["version"]
+    latestVer = addonVer()
     for scene in bpy.data.scenes:
         scene.brres.version = latestVer
+
+
+def addonVer() -> tuple[int, int, int]:
+    """Current version of the BerryBush addon, respresented as a tuple."""
+    # this is all needed for the version setup descriped in scene.py
+    from .. import bl_info # pylint: disable=import-outside-toplevel
+    return bl_info["version"]
+
+
+def verStr(ver: tuple):
+    """Get a string representation for an addon version."""
+    return ".".join(str(i) for i in ver)
 
 
 class UpdateBRRES(bpy.types.Operator):
@@ -28,10 +38,9 @@ class UpdateBRRES(bpy.types.Operator):
 
     def execute(self, context: bpy.types.Context):
         # get latest version & blendfile version from scene settings
-        from .. import bl_info # pylint: disable=import-outside-toplevel
-        latestVer = bl_info["version"]
         sceneSettings = bpy.data.scenes[0].brres
         currentVer = tuple(sceneSettings.version)
+        latestVer = addonVer()
         # special 1.0.0 detection (it used a different version system)
         if "version_" in sceneSettings:
             currentVer = (1, 0, 0)
@@ -39,8 +48,8 @@ class UpdateBRRES(bpy.types.Operator):
                 del scene.brres["version_"]
         # perform updates
         if currentVer != latestVer and currentVer != (0, 0, 0):
-            verStr = f"{currentVer[0]}.{currentVer[1]}.{currentVer[2]}"
-            self.report({'INFO'}, f"Loading file saved using BerryBush version {verStr}")
+            curVerStr = verStr(currentVer)
+            self.report({'INFO'}, f"Loading file saved using BerryBush version {curVerStr}")
             if currentVer == (1, 0, 0):
                 bpy.ops.brres.update_vert_colors_1_0_0('INVOKE_DEFAULT')
                 currentVer = (1, 1, 0)
@@ -52,7 +61,7 @@ class UpdateBRRES(bpy.types.Operator):
 class UpdateVertColors1_1_0(bpy.types.Operator):
     """Update all vertex colors in the scene from BerryBush 1.0.0 conventions to 1.1.0."""
 
-    bl_idname = "brres.update_vert_colors_1_0_0"
+    bl_idname = "brres.update_vert_colors_1_1_0"
     bl_label = "Update Vertex Colors for BerryBush 1.1.0"
     bl_options = {'UNDO'}
 
