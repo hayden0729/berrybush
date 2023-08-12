@@ -198,10 +198,12 @@ vec4 getTevOutput() {
                 if (params.compChan < 3) {
                     // compare combined color bits
                     vec2 compArgs;
-                    switch (params.compChan) {
-                        case 0: for (int i = 0; i < 2; i++) { compArgs[i] = colorArgs[i].r; }; break;
-                        case 1: for (int i = 0; i < 2; i++) { compArgs[i] = colorArgs[i].r + colorArgs[i].g * 255; }; break;
-                        case 2: for (int i = 0; i < 2; i++) { compArgs[i] = colorArgs[i].r + colorArgs[i].g * 255 + colorArgs[i].b * 255 * 255; }; break;
+                    for (int i = 0; i < 2; i++) {
+                        switch (params.compChan) {
+                            case 0: compArgs[i] = colorArgs[i].r; break;
+                            case 1: compArgs[i] = colorArgs[i].r + colorArgs[i].g * 255; break;
+                            case 2: compArgs[i] = colorArgs[i].r + colorArgs[i].g * 255 + colorArgs[i].b * 255 * 255; break;
+                        }
                     }
                     if ((params.op == 0 && compArgs[0] > compArgs[1]) || (params.op == 1 && compArgs[0] == compArgs[1])) {
                         calcOutput += args[2];
