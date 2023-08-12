@@ -45,7 +45,7 @@ class JointAnimReader(JointAnimSerializer["VIS0Reader"], Reader, StrPoolReadMixi
             anim.frames = np.array([animCode.fixedVal])
         else:
             # data is stored as a simple sequence of bits, padded to a multiple of 4 bytes
-            numFrames = self.parentSer.length + 1
+            numFrames = self.parentSer.length
             dataOffset = self.offset + self._HEAD_STRCT.size
             dataSize = pad(numFrames, 32) // 8
             unpackedData = np.frombuffer(data[dataOffset : dataOffset + dataSize], dtype=np.uint8)
@@ -69,7 +69,7 @@ class JointAnimWriter(JointAnimSerializer["VIS0Writer"], Writer, StrPoolWriteMix
         else:
             # calculate & store data size (here instead of in _calcSize() for convenience;
             # only have to check if fixed once)
-            numFrames = self.parentSer.getInstance().length + 1
+            numFrames = self.parentSer.getInstance().length
             dataSize = pad(numFrames, 32) // 8
             self._size = self._HEAD_STRCT.size + dataSize
         return self
@@ -80,7 +80,7 @@ class JointAnimWriter(JointAnimSerializer["VIS0Writer"], Writer, StrPoolWriteMix
     def pack(self):
         packedData = b""
         if not self._animCode.fixed:
-            numFrames = self.parentSer.getInstance().length + 1
+            numFrames = self.parentSer.getInstance().length
             dataSize = pad(numFrames, 32) // 8
             frames = self._data.frames[:numFrames]
             frames = np.pad(frames, (0, numFrames - len(frames)), "edge")
