@@ -85,6 +85,10 @@ class RegAnim():
 
 class RegAnimWriter(Writer["MatAnimWriter", RegAnim]):
 
+    def __init__(self, parent: "MatAnimWriter", offset = 0):
+        super().__init__(parent, offset)
+        self._colors: np.ndarray = None
+
     @property
     def offset(self):
         return self._offset
@@ -93,11 +97,22 @@ class RegAnimWriter(Writer["MatAnimWriter", RegAnim]):
     def offset(self, o: int):
         self._offset = o
 
+    def fromInstance(self, data: RegAnim):
+        super().fromInstance(data)
+        # packed frames: all frames for this animation, cropped or padded to parent length + 1
+        # (there's always an extra frame for the endpoint, even though it's unused ingame as
+        # only the half-open [start, end) frame interval matters)
+        numPackedFrames = self.parentSer.parentSer.getInstance().length + 1
+        colors = self._data.colors[:numPackedFrames] # crop
+        self._colors = np.pad(colors, ((0, numPackedFrames - len(colors)), (0, 0)), "edge") # pad
+        self._size = self._colors.size
+        return self
+
     def _calcSize(self):
-        return self._data.colors.size
+        return super()._calcSize()
 
     def pack(self):
-        return self._data.colors.tobytes()
+        return self._colors.tobytes()
 
 
 class MatAnim():
@@ -160,8 +175,7 @@ class MatAnimReader(MatAnimSerializer["CLR0Reader"], Reader, StrPoolReadMixin):
                     # note: offset is relative to exactly where the offset is stored
                     # (4 bytes after data offset)
                     animOffset = dataOffset + 4 + int.from_bytes(colorData, "big")
-                    # another note: do length + 1 bc there's an entry for both start and end edges
-                    colorData = data[animOffset : animOffset + (self.parentSer.length + 1) * 4]
+                    colorData = data[animOffset : animOffset + (self.parentSer.length) * 4]
                 colors = np.frombuffer(colorData, dtype=np.uint8).reshape(-1, 4)
                 anim.setRegAnim(i, RegAnim(colors, mask))
                 dataOffset += self._REG_ENTRY_STRCT.size
