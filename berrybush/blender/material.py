@@ -119,6 +119,9 @@ class IndTransform(CustomIDPropertyGroup):
     def defaultName(cls):
         return "Indirect Transform"
 
+    def onNameChange(self, newName: str):
+        self.transform.name = newName # this makes fcurves display the ind transform name
+
     transform: bpy.props.PointerProperty(type=TextureTransform)
 
 
@@ -146,7 +149,7 @@ class ColorRegSettings(CloneablePropertyGroup):
         return {m.name: m.brres.colorRegs for m in mats}
 
     constant1: bpy.props.FloatVectorProperty(
-        name="Slot 1",
+        name="Constant Slot 1",
         description="Color register whose value can be read by TEV stages",
         default=(0, 0, 0, 0),
         min=0,
@@ -156,7 +159,7 @@ class ColorRegSettings(CloneablePropertyGroup):
     )
 
     constant2: bpy.props.FloatVectorProperty(
-        name="Slot 2",
+        name="Constant Slot 2",
         description="Color register whose value can be read by TEV stages",
         default=(0, 0, 0, 0),
         min=0,
@@ -166,7 +169,7 @@ class ColorRegSettings(CloneablePropertyGroup):
     )
 
     constant3: bpy.props.FloatVectorProperty(
-        name="Slot 3",
+        name="Constant Slot 3",
         description="Color register whose value can be read by TEV stages",
         default=(0, 0, 0, 0),
         min=0,
@@ -176,7 +179,7 @@ class ColorRegSettings(CloneablePropertyGroup):
     )
 
     constant4: bpy.props.FloatVectorProperty(
-        name="Slot 4",
+        name="Constant Slot 4",
         description="Color register whose value can be read by TEV stages",
         default=(0, 0, 0, 1),
         min=0,
@@ -186,7 +189,7 @@ class ColorRegSettings(CloneablePropertyGroup):
     )
 
     standard1: bpy.props.FloatVectorProperty(
-        name="Slot 1",
+        name="Standard Slot 1",
         description="Color register whose value can be read and written to by TEV stages",
         default=(1, 1, 1, 1),
         min=0,
@@ -199,7 +202,7 @@ class ColorRegSettings(CloneablePropertyGroup):
     )
 
     standard2: bpy.props.FloatVectorProperty(
-        name="Slot 2",
+        name="Standard Slot 2",
         description="Color register whose value can be read and written to by TEV stages",
         default=(0, 0, 0, 0),
         min=0,
@@ -209,7 +212,7 @@ class ColorRegSettings(CloneablePropertyGroup):
     )
 
     standard3: bpy.props.FloatVectorProperty(
-        name="Slot 3",
+        name="Standard Slot 3",
         description="Color register whose value can be read and written to by TEV stages",
         default=(0, 0, 0, 0),
         min=0,
@@ -219,7 +222,7 @@ class ColorRegSettings(CloneablePropertyGroup):
     )
 
     standard4: bpy.props.FloatVectorProperty(
-        name="Slot 4",
+        name="Standard Slot 4",
         description="Color register whose value can be read and written to by TEV stages",
         default=(0, 0, 0, 0),
         min=0,
@@ -755,7 +758,7 @@ class ColorRegPanel(PropertyPanel):
                 if propName == "standard" and i == 1:
                     sublayout = layout.row()
                     sublayout.enabled = False
-                drawProp(sublayout, clrRegs, f"{propName}{i}", factor=.2)
+                drawProp(sublayout, clrRegs, f"{propName}{i}", factor=.2, text=f"Slot {i}")
 
 
 class LightChannelPanel(PropertyPanel):

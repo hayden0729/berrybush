@@ -60,6 +60,9 @@ class TexSettings(CustomIDPropertyGroup):
     def defaultName(cls):
         return "Texture"
 
+    def onNameChange(self, newName: str):
+        self.transform.name = newName # this makes fcurves display the texture name
+
     def drawListItem(self: bpy.types.UIList, context: bpy.types.Context, layout: bpy.types.UILayout,
                      data, item, icon: int, active_data, active_property: str, index=0, flt_flag=0):
         # pylint: disable=attribute-defined-outside-init

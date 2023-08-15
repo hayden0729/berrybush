@@ -315,7 +315,12 @@ class CustomIDPropertyGroup(CloneablePropertyGroup):
             return
         names = {item.name for item in parseDataPath(repr(self), -1)}
         names.remove(self.name)
-        self["name"] = makeUniqueName(name, names)
+        newName = makeUniqueName(name, names)
+        self["name"] = newName
+        self.onNameChange(newName)
+
+    def onNameChange(self, newName: str):
+        """Called whenever this property group's name is changed, after the change."""
 
     _collPropertyType: type[_CustomIDCollectionProperty]
     _uiListType: type[bpy.types.UIList]

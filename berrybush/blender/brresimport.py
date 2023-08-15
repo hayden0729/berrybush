@@ -874,6 +874,7 @@ class BRRESAnimImporter(Generic[ANIM_SUBFILE_T]):
         # make keyframes
         numKfs = len(kfs)
         fc = action.fcurves.new(path, index=idx)
+        fc.color_mode = 'AUTO_RGB'
         fc.keyframe_points.add(numKfs)
         coords = kfs[:, :2].copy()
         coords[:, 0] += self.parentImporter.settings.frameStart
@@ -933,9 +934,15 @@ class BRRESChrImporter(BRRESAnimImporter[chr0.CHR0]):
                 scalePath, rotPath, transPath = [poseBone.path_from_id(p) for p in vecProps]
                 # scale
                 if jAnim.scale:
+                    fcInfo: dict[int, np.ndarray] = {}
                     for cIdx, cAnim in enumerate(jAnim.scale):
                         kfs = cAnim.keyframes.copy()
                         cIdx = transformAxis(cIdx, mtxBoneFromBRRES)[0]
+                        fcInfo[cIdx] = kfs
+                    # sort to add fcurves in the correct order, since it may get
+                    # messed up by axis transformations
+                    # (this order is purely a visual thing within blender)
+                    for cIdx, kfs in sorted(fcInfo.items(), key=lambda item: item[0]):
                         self._genFCurve(kfs, action, scalePath, cIdx)
                 # rotation
                 # rest pose compensation is done by interpolating rotation for each frame &
@@ -959,6 +966,7 @@ class BRRESChrImporter(BRRESAnimImporter[chr0.CHR0]):
                     for i, compVals in enumerate(frames.swapaxes(0, 1)):
                         coords = np.stack((fRange + frameStart, compVals), axis=-1)
                         fc = action.fcurves.new(rotPath, index=i)
+                        fc.color_mode = 'AUTO_RGB'
                         fc.keyframe_points.add(numFrames)
                         fc.keyframe_points.foreach_set("co", coords.flatten())
                         linear = enumVal(bpy.types.Keyframe, "interpolation", 'LINEAR')
@@ -976,11 +984,17 @@ class BRRESChrImporter(BRRESAnimImporter[chr0.CHR0]):
                     if poseBone.parent: # head is relative to parent tail; adjust for that
                         restTrans[1] += importScale * boneLen
                     restTrans = restTrans @ convertMtx
+                    fcInfo: dict[int, np.ndarray] = {}
                     for cIdx, (cAnim, rest) in enumerate(zip(jAnim.trans, restTrans)):
                         kfs = cAnim.keyframes.copy()
                         kfs[:, 1] -= rest
                         cIdx, kfScalar = transformAxis(cIdx, convertMtx)
                         kfs[:, 1:] *= kfScalar / importScale
+                        fcInfo[cIdx] = kfs
+                    # sort to add fcurves in the correct order, since it may get
+                    # messed up by axis transformations
+                    # (this order is purely a visual thing within blender)
+                    for cIdx, kfs in sorted(fcInfo.items(), key=lambda item: item[0]):
                         self._genFCurve(kfs, action, transPath, cIdx)
             if action.fcurves:
                 # if anything was generated, this model supports this animation, so create track
@@ -1018,6 +1032,7 @@ class BRRESClrImporter(BRRESAnimImporter[clr0.CLR0]):
                 for i, (mask, chan) in enumerate(zip(regAnim.mask, regAnim.normalized.T)):
                     if not mask:
                         fc = action.fcurves.new(regPath, index=i)
+                        fc.color_mode = 'AUTO_RGB'
                         fc.keyframe_points.add(len(chan))
                         coords = np.stack((frameIdcs, chan), axis=-1)
                         fc.keyframe_points.foreach_set("co", coords.flatten())

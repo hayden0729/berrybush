@@ -25,9 +25,19 @@ def addonVer() -> tuple[int, int, int]:
     return bl_info["version"]
 
 
-def verStr(ver: tuple):
+def verStr(ver: tuple[int, int, int]):
     """Get a string representation for an addon version."""
     return ".".join(str(i) for i in ver)
+
+
+def compareVers(verA: tuple[int, int, int], verB: tuple[int, int, int]):
+    """Return -1 if verA < verB, 0 if verA == verB, and 1 if verA > verB."""
+    for a, b in zip(verA, verB):
+        if a < b:
+            return -1
+        elif a > b:
+            return 1
+    return 0
 
 
 class UpdateBRRES(bpy.types.Operator):
@@ -50,9 +60,19 @@ class UpdateBRRES(bpy.types.Operator):
         if currentVer != latestVer and currentVer != (0, 0, 0):
             curVerStr = verStr(currentVer)
             self.report({'INFO'}, f"Loading file saved using BerryBush version {curVerStr}")
-            if currentVer == (1, 0, 0):
-                bpy.ops.brres.update_vert_colors_1_0_0('INVOKE_DEFAULT')
+            # 1.1.0
+            if compareVers(currentVer, (1, 1, 0)) < 0:
+                # open vertex color gamma updater
+                bpy.ops.brres.update_vert_colors_1_1_0('INVOKE_DEFAULT')
                 currentVer = (1, 1, 0)
+            # 1.1.4
+            if compareVers(currentVer, (1, 1, 4)) < 0:
+                # update texture transform names for fcurves
+                for mat in bpy.data.materials:
+                    for tex in mat.brres.textures:
+                        tex.transform.name = tex.name
+                    for indTf in mat.brres.indSettings.transforms:
+                        indTf.transform.name = indTf.name
             for scene in bpy.data.scenes:
                 scene.brres.version = latestVer
         return {'FINISHED'}
