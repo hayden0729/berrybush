@@ -1709,8 +1709,11 @@ class DrawPrimitives(Command):
     OPCODE: bytes
     _faceCache = np.ndarray((0, 0))
 
-    def __init__(self, numVerts = 0):
-        self._vertData = np.zeros((numVerts, MAX_ATTRS), dtype=np.uint16)
+    def __init__(self, numVerts = 0, vertData: np.ndarray = None):
+        if vertData is None:
+            self._vertData = np.zeros((numVerts, MAX_ATTRS), dtype=np.uint16)
+        else:
+            self.vertData = vertData
 
     def _getAttr(self, attrIdx: int, numAttrs: int):
         """Get vertex data from the attribute index and # per vertex."""
