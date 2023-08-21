@@ -1214,12 +1214,14 @@ class BRRESImporter():
         self.anims: dict[animation.AnimSubfile, BRRESAnimImporter] = {}
         self.actions: dict[str, str] = {}
         self.texImgSlots: dict[str, dict[int, list[str]]] = {}
+        animFilter = settings.animFilter
         if settings.doAnim:
             animSubfileTypes = (chr0.CHR0, clr0.CLR0, pat0.PAT0, srt0.SRT0, vis0.VIS0)
             anims = [f for t in animSubfileTypes for f in res.folder(t)]
             anims.sort(key=lambda f: f.name, reverse=True)
             for anim in anims:
-                self._loadAnim(anim)
+                if animFilter in anim.name:
+                    self._loadAnim(anim)
             self._processPatAnims()
 
     def _processPatAnims(self):
@@ -1435,6 +1437,11 @@ class ImportSettings(bpy.types.PropertyGroup):
         default=False
     )
 
+    animFilter: bpy.props.StringProperty(
+        name="Filter",
+        description="Only animations with names containing this string are imported (leave blank to import all animations)" # pylint: disable=line-too-long
+    )
+
     frameStart: bpy.props.IntProperty(
         name="Frame Start",
         description="First frame of animation",
@@ -1541,4 +1548,5 @@ class AnimPanel(ImportPanel):
         settings: ImportSettings = context.space_data.active_operator.settings
         layout.enabled = settings.doAnim
         layout.prop(settings, "animsForExisting")
+        layout.prop(settings, "animFilter")
         layout.prop(settings, "frameStart")
