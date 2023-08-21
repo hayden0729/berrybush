@@ -389,11 +389,13 @@ class DiscreteAnimSerializer(AnimSerializer):
     def _interpolated(self):
         """All interpolated frame values for this animation."""
         a = self._data
-        l = self.length if self.length is not None else a.keyframes[-1, 1] - a.keyframes[0, 1]
-        return a.interpolate(np.arange(l))
+        l = self.length if self.length is not None else a.keyframes[-1, 0] - a.keyframes[0, 0]
+        return a.interpolate(np.arange(l + 1))
 
     def size(self):
-        return self._HEAD_STRCT.size + pad(self._FRAME_TYPE.itemsize * len(self._data.keyframes), 4)
+        a = self._data
+        l = self.length if self.length is not None else a.keyframes[-1, 0] - a.keyframes[0, 0]
+        return self._HEAD_STRCT.size + pad(self._FRAME_TYPE.itemsize * int(l + 1), 4)
 
     @classmethod
     def framesStorable(cls, length: int):
@@ -429,7 +431,7 @@ class CompressedDiscAnimSerializer(DiscreteAnimSerializer, CompressedAnimSeriali
         self._data.length = length = self.length if self.length is not None else 0
         self.step, base = self._HEAD_STRCT.unpack_from(data)
         offset = self.offset + self._HEAD_STRCT.size
-        vals = base + self.step * np.frombuffer(data[offset:], dtype=self._FRAME_TYPE, count=length)
+        vals = base + self.step * np.frombuffer(data[offset:], self._FRAME_TYPE, length + 1)
         kfs = (np.arange(len(vals)), vals, np.zeros(len(vals)))
         self._data.keyframes = np.stack(kfs, axis=1).astype(float)
         self._data.setSmooth()
@@ -465,7 +467,7 @@ class D4(DiscreteAnimSerializer):
         super().unpack(data)
         self._data = Animation()
         self._data.length = self.length if self.length is not None else 0
-        vals = np.frombuffer(data[self.offset:], dtype=self._FRAME_TYPE, count=self._data.length)
+        vals = np.frombuffer(data[self.offset:], self._FRAME_TYPE, self._data.length + 1)
         kfs = (np.arange(len(vals)), vals, np.zeros(len(vals)))
         self._data.keyframes = np.stack(kfs, axis=1).astype(float)
         self._data.setSmooth()
