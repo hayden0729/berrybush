@@ -1277,7 +1277,7 @@ class ExportSettings(bpy.types.PropertyGroup):
 
     includeSuppressed: bpy.props.BoolProperty(
         name="Bypass Warning Suppression",
-        description="Report all detected problems, including those flagged to be ignored.",
+        description="Report all detected problems, including those flagged to be ignored",
         default=False
     )
 
