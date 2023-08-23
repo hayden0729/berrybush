@@ -1111,7 +1111,8 @@ class BRRESVisExporter(BRRESAnimExporter[vis0.VIS0]):
 
 class BRRESExporter():
 
-    def __init__(self, context: bpy.types.Context, file, settings: "ExportSettings"):
+    def __init__(self, context: bpy.types.Context, file, settings: "ExportSettings",
+                 baseData: bytes = b""):
         self.res = brres.BRRES()
         self.context = context
         self.depsgraph = context.evaluated_depsgraph_get()
@@ -1176,6 +1177,16 @@ class BRRESExporter():
             # optimized, since geometry data doesn't have to be processed in this case, but this is
             # rarely even a useful setting so for now, idrc)
             self.res.files.pop(mdl0.MDL0, None)
+        # optionally merge with existing file
+        if baseData:
+            baseRes = brres.BRRES.unpack(baseData)
+            for fType, folder in self.res.files.items():
+                # get files from base folder & new folder and overwrite those w/ same names
+                baseFolder = baseRes.folder(fType)
+                baseFiles = {f.name: f for f in baseFolder}
+                newFiles = {f.name: f for f in folder}
+                baseFolder[:] = (baseFiles | newFiles).values() # in conflicts, new files win
+            self.res = baseRes
         # write file
         self.res.sort()
         packed = self.res.pack()
@@ -1322,6 +1333,12 @@ class ExportSettings(bpy.types.PropertyGroup):
         default=16
     )
 
+    doMerge: bpy.props.BoolProperty(
+        name="Merge Files",
+        description="If a file with this name already exists, also include its sub-files not overwritten by the current model in the export", # pylint: disable=line-too-long
+        default=False
+    )
+
     doArmGeo: bpy.props.BoolProperty(
         name="Export Armatures & Geometry",
         default=True
@@ -1458,8 +1475,15 @@ class ExportBRRES(bpy.types.Operator, ExportHelper):
         restoreShading = solidView(context) # temporarily set viewports to solid view for speed
         context.window.cursor_set('WAIT')
         self.report({'INFO'}, "Exporting BRRES...")
+        baseData = b""
+        if self.settings.doMerge: # get base brres data for merge
+            try:
+                with open(self.filepath, "rb") as f:
+                    baseData = f.read()
+            except FileNotFoundError:
+                pass
         with open(self.filepath, "wb") as f:
-            BRRESExporter(context, f, self.settings)
+            BRRESExporter(context, f, self.settings, baseData)
         name = f"\"{os.path.basename(self.filepath)}\""
         warns, suppressed = verifyBRRES(self, context)
         if warns:
@@ -1521,6 +1545,7 @@ class GeneralPanel(ExportPanel):
         # everything else
         layout.prop(settings, "limitTo")
         layout.prop(settings, "scale")
+        layout.prop(settings, "doMerge")
 
 
 class ArmGeoPanel(ExportPanel):
