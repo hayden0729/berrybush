@@ -1329,7 +1329,7 @@ class ExportSettings(bpy.types.PropertyGroup):
 
     scale: bpy.props.FloatProperty(
         name="Scale",
-        description=("Export is scaled up by this factor. Recommended values are 16 for most models and 30 for worldmaps"), # pylint: disable=line-too-long
+        description="Export is scaled up by this factor. Recommended values are 16 for most models and 30 for worldmaps", # pylint: disable=line-too-long
         default=16
     )
 
