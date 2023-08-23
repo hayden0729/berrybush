@@ -1,5 +1,7 @@
 # standard imports
+from datetime import datetime
 from functools import cache
+from pathlib import Path
 import os
 from typing import Generic, TypeVar
 # 3rd party imports
@@ -1178,7 +1180,7 @@ class BRRESExporter():
             # rarely even a useful setting so for now, idrc)
             self.res.files.pop(mdl0.MDL0, None)
         # optionally merge with existing file
-        if baseData:
+        if settings.doMerge and baseData:
             baseRes = brres.BRRES.unpack(baseData)
             for fType, folder in self.res.files.items():
                 # get files from base folder & new folder and overwrite those w/ same names
@@ -1333,6 +1335,12 @@ class ExportSettings(bpy.types.PropertyGroup):
         default=16
     )
 
+    doBackup: bpy.props.BoolProperty(
+        name="Create Backup",
+        description="If a file with this name already exists, create a backup",
+        default=True
+    )
+
     doMerge: bpy.props.BoolProperty(
         name="Merge Files",
         description="If a file with this name already exists, also include its sub-files not overwritten by the current model in the export", # pylint: disable=line-too-long
@@ -1476,13 +1484,19 @@ class ExportBRRES(bpy.types.Operator, ExportHelper):
         context.window.cursor_set('WAIT')
         self.report({'INFO'}, "Exporting BRRES...")
         baseData = b""
-        if self.settings.doMerge: # get base brres data for merge
+        if self.settings.doMerge or self.settings.doBackup: # get existing data for merge/backup
             try:
                 with open(self.filepath, "rb") as f:
                     baseData = f.read()
+                    if self.settings.doBackup: # back up data into another file if enabled
+                        path = Path(self.filepath)
+                        backupLabel = datetime.now().strftime("_backup_%Y%m%d_%H%M%S")
+                        backupPath = Path(path.parent, path.stem + backupLabel + path.suffix)
+                        with open(str(backupPath), "wb") as f:
+                            f.write(baseData)
             except FileNotFoundError:
                 pass
-        with open(self.filepath, "wb") as f:
+        with open(self.filepath, "wb") as f: # export main file
             BRRESExporter(context, f, self.settings, baseData)
         name = f"\"{os.path.basename(self.filepath)}\""
         warns, suppressed = verifyBRRES(self, context)
@@ -1545,6 +1559,7 @@ class GeneralPanel(ExportPanel):
         # everything else
         layout.prop(settings, "limitTo")
         layout.prop(settings, "scale")
+        layout.prop(settings, "doBackup")
         layout.prop(settings, "doMerge")
 
 
