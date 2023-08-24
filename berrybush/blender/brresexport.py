@@ -1485,7 +1485,7 @@ class ExportBRRES(bpy.types.Operator, ExportHelper):
                     baseData = f.read()
                     if self.doBackup: # back up data into another file if enabled
                         path = Path(self.filepath)
-                        backupLabel = datetime.now().strftime("_backup_%Y%m%d_%H%M%S")
+                        backupLabel = datetime.now().strftime("_backup_%Y-%m-%d_%H-%M-%S")
                         backupPath = Path(path.parent, path.stem + backupLabel + path.suffix)
                         with open(str(backupPath), "wb") as f:
                             f.write(baseData)
