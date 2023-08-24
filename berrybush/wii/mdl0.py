@@ -598,13 +598,14 @@ class VertexAttrGroup():
 
     ATTR_TYPE = gx.VertexAttr
 
-    def __init__(self, name: str = None, arr: np.ndarray = None):
+    def __init__(self, name: str = None, arr: np.ndarray = None, attr: ATTR_TYPE = None):
         self.name = name
-        self.forceRaw = False
         if arr is None:
             self._arr = np.ndarray((0, self.ATTR_TYPE.PADDED_COUNT))
         else:
             self.setArr(arr)
+        self.attr = attr
+        """GX attribute descriptor to use when packing. Set to None for automatic generation."""
 
     def __len__(self):
         return len(self._arr)
@@ -624,19 +625,23 @@ class VertexAttrGroup():
             raise TypeError("Array vectors have too many components")
         self._arr = self.ATTR_TYPE.pad(arr)
 
-    def attr(self):
-        """GX vertex attribute descriptor for this group, generated based on its data."""
+    def genAttr(self):
+        """Generate a GX vertex attribute descriptor for this group based on its data."""
         return self.ATTR_TYPE()
+
+    def getAttr(self):
+        """Return this group's attribute descriptor, if it has one.
+
+        Otherwise, generate and return a new one (not assigned to the group automatically)."""
+        return self.attr if self.attr else self.genAttr()
 
 
 class StdVertexAttrGroup(VertexAttrGroup):
     """Standard vertex attribute group template followed by most attribute types."""
     ATTR_TYPE = gx.StdVertexAttr
 
-    def attr(self):
-        attr = super().attr()
-        if self.forceRaw:
-            return attr
+    def genAttr(self):
+        attr = super().genAttr()
         arr = self._arr
         arrMax = np.max(arr)
         arrMin = np.min(arr)
@@ -685,9 +690,9 @@ class VertexAttrGroupReader(VertexAttrGroupSerializer["MDL0Reader"], Reader, Str
         dataOffset = unpackedData[2] + self.offset
         self._data = self.DATA_TYPE()
         self._attr = self._unpackAttr(unpackedData[5:9])
-        self._data.forceRaw = self._attr == self._data.ATTR_TYPE()
         arr = self._attr.unpackBuffer(data[dataOffset:], unpackedData[9])
         self._data.setArr(arr)
+        self._data.attr = self._attr
         return self
 
     def _updateInstance(self):
@@ -727,7 +732,7 @@ class VertexAttrGroupWriter(VertexAttrGroupSerializer["MDL0Writer"], Writer, Str
 
     def fromInstance(self, data: VertexAttrGroup):
         super().fromInstance(data)
-        self._attr = self._data.attr()
+        self._attr = self._data.getAttr()
         self._size = self._headSize() + pad(self._attr.calcBufferSize(len(self._data)), 32)
         return self
 
@@ -787,10 +792,8 @@ class PsnGroup(StdVertexAttrGroup):
     """Group of vertex positions."""
     ATTR_TYPE = gx.PsnAttr
 
-    def attr(self):
-        attr = super().attr()
-        if self.forceRaw:
-            return attr
+    def genAttr(self):
+        attr = super().genAttr()
         arr = self._arr
         padVal = attr.PAD_VAL
         if np.allclose(arr[:, 2], padVal): # (else implicitly xyz)
@@ -814,10 +817,8 @@ class NrmGroup(StdVertexAttrGroup):
         super().__init__(name, arr)
         self.isNBT = False
 
-    def attr(self):
-        attr = super().attr()
-        if self.forceRaw:
-            return attr
+    def genAttr(self):
+        attr = super().genAttr()
         arr = self._arr
         if self.isNBT: # (else implicitly n)
             if len(arr) == arr.size / 9:
@@ -844,10 +845,8 @@ class ClrGroup(VertexAttrGroup):
     """Group of vertex colors."""
     ATTR_TYPE = gx.ClrAttr
 
-    def attr(self):
-        attr = super().attr()
-        if self.forceRaw:
-            return attr
+    def genAttr(self):
+        attr = super().genAttr()
         arr = self._arr
         padVal = attr.PAD_VAL
         dtypes = gx.ClrAttr.DataType
@@ -884,10 +883,8 @@ class UVGroup(StdVertexAttrGroup):
     """Group of vertex UVs."""
     ATTR_TYPE = gx.UVAttr
 
-    def attr(self):
-        attr = super().attr()
-        if self.forceRaw:
-            return attr
+    def genAttr(self):
+        attr = super().genAttr()
         arr = self._arr
         padVal = attr.PAD_VAL
         if np.allclose(arr[:, 1], padVal): # (else implicitly uv)
@@ -1920,7 +1917,7 @@ class Mesh():
         for groups, defs in attrPairs:
             for i, g in groups.items():
                 d = defs[i]
-                d.fmt = g.attr()
+                d.fmt = g.getAttr()
                 d.dec = gx.StdAttrDec.IDX8 if len(g) <= maxBitVal(8) else gx.StdAttrDec.IDX16
                 # d.dec = gx.StdAttrDec.IDX16 if bigIdcs[attrIdx + i] else gx.StdAttrDec.IDX8
             # attrIdx += len(defs)
