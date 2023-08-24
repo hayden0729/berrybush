@@ -1113,7 +1113,7 @@ class BRRESVisExporter(BRRESAnimExporter[vis0.VIS0]):
 
 class BRRESExporter():
 
-    def __init__(self, context: bpy.types.Context, file, settings: "ExportSettings",
+    def __init__(self, context: bpy.types.Context, file, settings: "ExportBRRES",
                  baseData: bytes = b""):
         self.res = brres.BRRES()
         self.context = context
@@ -1286,7 +1286,18 @@ def drawOp(self, context: bpy.types.Context):
     self.layout.operator(ExportBRRES.bl_idname, text="Binary Revolution Resource (.brres)")
 
 
-class ExportSettings(bpy.types.PropertyGroup):
+class ExportBRRES(bpy.types.Operator, ExportHelper):
+    """Write a BRRES file"""
+
+    bl_idname = "export_scene.brres"
+    bl_label = "Export BRRES"
+    bl_options = {'UNDO', 'PRESET'}
+
+    filename_ext = ".brres"
+    filter_glob: bpy.props.StringProperty(
+        default="*.brres",
+        options={'HIDDEN'},
+    )
 
     includeSuppressed: bpy.props.BoolProperty(
         name="Bypass Warning Suppression",
@@ -1458,22 +1469,6 @@ class ExportSettings(bpy.types.PropertyGroup):
         default=1
     )
 
-
-class ExportBRRES(bpy.types.Operator, ExportHelper):
-    """Write a BRRES file"""
-
-    bl_idname = "export_scene.brres"
-    bl_label = "Export BRRES"
-    bl_options = {'UNDO', 'PRESET'}
-
-    filename_ext = ".brres"
-    filter_glob: bpy.props.StringProperty(
-        default="*.brres",
-        options={'HIDDEN'},
-    )
-
-    settings: bpy.props.PointerProperty(type=ExportSettings)
-
     def execute(self, context):
         import cProfile, pstats
         from pstats import SortKey
@@ -1484,11 +1479,11 @@ class ExportBRRES(bpy.types.Operator, ExportHelper):
         context.window.cursor_set('WAIT')
         self.report({'INFO'}, "Exporting BRRES...")
         baseData = b""
-        if self.settings.doMerge or self.settings.doBackup: # get existing data for merge/backup
+        if self.doMerge or self.doBackup: # get existing data for merge/backup
             try:
                 with open(self.filepath, "rb") as f:
                     baseData = f.read()
-                    if self.settings.doBackup: # back up data into another file if enabled
+                    if self.doBackup: # back up data into another file if enabled
                         path = Path(self.filepath)
                         backupLabel = datetime.now().strftime("_backup_%Y%m%d_%H%M%S")
                         backupPath = Path(path.parent, path.stem + backupLabel + path.suffix)
@@ -1497,7 +1492,7 @@ class ExportBRRES(bpy.types.Operator, ExportHelper):
             except FileNotFoundError:
                 pass
         with open(self.filepath, "wb") as f: # export main file
-            BRRESExporter(context, f, self.settings, baseData)
+            BRRESExporter(context, f, self, baseData)
         name = f"\"{os.path.basename(self.filepath)}\""
         warns, suppressed = verifyBRRES(self, context)
         if warns:
@@ -1541,7 +1536,7 @@ class GeneralPanel(ExportPanel):
         layout = self.layout
         layout.use_property_split = True
         layout.use_property_decorate = False
-        settings: ExportSettings = context.space_data.active_operator.settings
+        settings: ExportBRRES = context.space_data.active_operator
         # padding options
         row = layout.row().split(factor=.4)
         row.use_property_split = False
@@ -1568,14 +1563,14 @@ class ArmGeoPanel(ExportPanel):
     bl_label = "Armatures & Geometry"
 
     def draw_header(self, context: bpy.types.Context):
-        settings: ExportSettings = context.space_data.active_operator.settings
+        settings: ExportBRRES = context.space_data.active_operator
         self.layout.prop(settings, "doArmGeo", text="")
 
     def draw(self, context: bpy.types.Context):
         layout = self.layout
         layout.use_property_split = True
         layout.use_property_decorate = False
-        settings: ExportSettings = context.space_data.active_operator.settings
+        settings: ExportBRRES = context.space_data.active_operator
         layout.enabled = settings.doArmGeo
         layout.prop(settings, "applyModifiers")
         layout.prop(settings, "useCurrentPose")
@@ -1591,14 +1586,14 @@ class ImagePanel(ExportPanel):
     bl_label = "Images"
 
     def draw_header(self, context: bpy.types.Context):
-        settings: ExportSettings = context.space_data.active_operator.settings
+        settings: ExportBRRES = context.space_data.active_operator
         self.layout.prop(settings, "doImg", text="")
 
     def draw(self, context: bpy.types.Context):
         layout = self.layout
         layout.use_property_split = True
         layout.use_property_decorate = False
-        settings: ExportSettings = context.space_data.active_operator.settings
+        settings: ExportBRRES = context.space_data.active_operator
         layout.enabled = settings.doImg
         layout.prop(settings, "includeUnusedImg")
 
@@ -1608,14 +1603,14 @@ class AnimPanel(ExportPanel):
     bl_label = "Animations"
 
     def draw_header(self, context: bpy.types.Context):
-        settings: ExportSettings = context.space_data.active_operator.settings
+        settings: ExportBRRES = context.space_data.active_operator
         self.layout.prop(settings, "doAnim", text="")
 
     def draw(self, context: bpy.types.Context):
         layout = self.layout
         layout.use_property_split = True
         layout.use_property_decorate = False
-        settings: ExportSettings = context.space_data.active_operator.settings
+        settings: ExportBRRES = context.space_data.active_operator
         layout.enabled = settings.doAnim
         layout.prop(settings, "includeArmAnims")
         layout.prop(settings, "includeMatAnims")

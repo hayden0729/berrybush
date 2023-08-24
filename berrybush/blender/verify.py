@@ -6,7 +6,7 @@ from .common import usedMatSlots, limitIncludes
 from ..wii import gx
 
 
-def verifyBRRES(op: bpy.types.Operator, context: bpy.types.Context):
+def verifyBRRES(op: "VerifyBRRES", context: bpy.types.Context):
     """Verify the scene's BRRES settings, reporting warnings.
 
     The number of warnings reported and number of warnings suppressed are returned.."""
@@ -14,12 +14,11 @@ def verifyBRRES(op: bpy.types.Operator, context: bpy.types.Context):
     numSuppressed = 0
     usedMats = set()
     images: set[bpy.types.Image] = set()
-    settings: VerifySettings = op.settings
     # invalid attribute references
     for rigObj in bpy.data.objects:
-        if rigObj.type == 'ARMATURE' and limitIncludes(settings.limitTo, rigObj):
+        if rigObj.type == 'ARMATURE' and limitIncludes(op.limitTo, rigObj):
             for obj in bpy.data.objects:
-                if limitIncludes(settings.limitTo, obj) and obj.parent is rigObj:
+                if limitIncludes(op.limitTo, obj) and obj.parent is rigObj:
                     try:
                         mesh = obj.to_mesh()
                     except RuntimeError:
@@ -131,7 +130,7 @@ def verifyBRRES(op: bpy.types.Operator, context: bpy.types.Context):
         # non-power of 2 dims
         dims = np.array(img.size, dtype=int)
         if any(bin(dim).count("1") > 1 for dim in dims):
-            if not settings.includeSuppressed and img.brres.warnSupPow2:
+            if not op.includeSuppressed and img.brres.warnSupPow2:
                 numSuppressed += 1
             else:
                 numProblems += 1
@@ -139,7 +138,7 @@ def verifyBRRES(op: bpy.types.Operator, context: bpy.types.Context):
                 op.report({'INFO'}, e)
         # excessive size
         if np.any(dims > imgMax):
-            if not settings.includeSuppressed and img.brres.warnSupSize:
+            if not op.includeSuppressed and img.brres.warnSupSize:
                 numSuppressed += 1
             else:
                 numProblems += 1
@@ -183,7 +182,11 @@ def drawWarningUI(layout: bpy.types.UILayout, data, propName: str, text: str):
     warnRow.prop(data, propName, text="", icon=supIcon, emboss=False)
 
 
-class VerifySettings(bpy.types.PropertyGroup):
+class VerifyBRRES(bpy.types.Operator):
+    """Verify the scene's BRRES settings"""
+
+    bl_idname = "brres.verify"
+    bl_label = "Verify BRRES Settings"
 
     limitTo: bpy.props.EnumProperty(
         name="Limit To",
@@ -201,15 +204,6 @@ class VerifySettings(bpy.types.PropertyGroup):
         description="Report all detected problems, including those flagged to be ignored",
         default=False
     )
-
-
-class VerifyBRRES(bpy.types.Operator):
-    """Verify the scene's BRRES settings"""
-
-    bl_idname = "brres.verify"
-    bl_label = "Verify BRRES Settings"
-
-    settings: bpy.props.PointerProperty(type=VerifySettings)
 
     def execute(self, context: bpy.types.Context):
         self.report({'INFO'}, "Searching for BRRES warnings...")
@@ -232,9 +226,8 @@ class VerifyBRRES(bpy.types.Operator):
     def draw(self, context: bpy.types.Context):
         layout = self.layout
         layout.use_property_split = True
-        settings = self.settings
-        self.layout.prop(settings, "limitTo")
-        self.layout.prop(settings, "includeSuppressed")
+        self.layout.prop(self, "limitTo")
+        self.layout.prop(self, "includeSuppressed")
 
 
 def drawOp(self, context: bpy.types.Context):

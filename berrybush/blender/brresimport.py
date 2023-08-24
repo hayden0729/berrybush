@@ -1180,7 +1180,7 @@ class BRRESVisImporter(BRRESAnimImporter[vis0.VIS0]):
 
 class BRRESImporter():
 
-    def __init__(self, context: bpy.types.Context, res: brres.BRRES, settings: "ImportSettings"):
+    def __init__(self, context: bpy.types.Context, res: brres.BRRES, settings: "ImportBRRES"):
         self.context = context
         self.res = res
         self.settings = settings
@@ -1350,7 +1350,18 @@ def drawOp(self, context: bpy.types.Context):
     self.layout.operator(ImportBRRES.bl_idname, text="Binary Revolution Resource (.brres)")
 
 
-class ImportSettings(bpy.types.PropertyGroup):
+class ImportBRRES(bpy.types.Operator, ImportHelper):
+    """Read a BRRES file"""
+
+    bl_idname = "import_scene.brres"
+    bl_label = "Import BRRES"
+    bl_options = {'UNDO', 'PRESET'}
+
+    filename_ext = ".brres"
+    filter_glob: bpy.props.StringProperty(
+        default="*.brres",
+        options={'HIDDEN'},
+    )
 
     mergeMats: bpy.props.BoolProperty(
         name="Merge Duplicate Materials",
@@ -1447,22 +1458,6 @@ class ImportSettings(bpy.types.PropertyGroup):
         default=1
     )
 
-
-class ImportBRRES(bpy.types.Operator, ImportHelper):
-    """Read a BRRES file"""
-
-    bl_idname = "import_scene.brres"
-    bl_label = "Import BRRES"
-    bl_options = {'UNDO', 'PRESET'}
-
-    filename_ext = ".brres"
-    filter_glob: bpy.props.StringProperty(
-        default="*.brres",
-        options={'HIDDEN'},
-    )
-
-    settings: bpy.props.PointerProperty(type=ImportSettings)
-
     def execute(self, context):
         import cProfile, pstats
         from pstats import SortKey
@@ -1476,7 +1471,7 @@ class ImportBRRES(bpy.types.Operator, ImportHelper):
             fileData = f.read()
             if not fileData:
                 raise ValueError("File is empty")
-            BRRESImporter(context, brres.BRRES.unpack(fileData), self.settings)
+            BRRESImporter(context, brres.BRRES.unpack(fileData), self)
         self.report({'INFO'}, f"Imported \"{os.path.basename(self.filepath)}\"")
         context.window.cursor_set('DEFAULT')
         restoreView(restoreShading)
@@ -1509,7 +1504,7 @@ class GeneralPanel(ImportPanel):
         layout = self.layout
         layout.use_property_split = True
         layout.use_property_decorate = False
-        settings: ImportSettings = context.space_data.active_operator.settings
+        settings: ImportBRRES = context.space_data.active_operator
         layout.prop(settings, "mergeMats")
         layout.prop(settings, "multiMatMeshes")
         layout.prop(settings, "useAttrNames")
@@ -1525,7 +1520,7 @@ class ArmPanel(ImportPanel):
         layout = self.layout
         layout.use_property_split = True
         layout.use_property_decorate = False
-        settings: ImportSettings = context.space_data.active_operator.settings
+        settings: ImportBRRES = context.space_data.active_operator
         layout.prop(settings, "boneLen")
         layout.prop(settings, "sscMode", expand=True)
         layout.prop(settings, "primaryBoneAxis", expand=True)
@@ -1537,14 +1532,14 @@ class AnimPanel(ImportPanel):
     bl_label = "Animations"
 
     def draw_header(self, context: bpy.types.Context):
-        settings: ImportSettings = context.space_data.active_operator.settings
+        settings: ImportBRRES = context.space_data.active_operator
         self.layout.prop(settings, "doAnim", text="")
 
     def draw(self, context: bpy.types.Context):
         layout = self.layout
         layout.use_property_split = True
         layout.use_property_decorate = False
-        settings: ImportSettings = context.space_data.active_operator.settings
+        settings: ImportBRRES = context.space_data.active_operator
         layout.enabled = settings.doAnim
         layout.prop(settings, "animsForExisting")
         layout.prop(settings, "animFilter")

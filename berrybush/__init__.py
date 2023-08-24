@@ -81,9 +81,6 @@ classes = (
     mesh.MeshSettings,
     bone.BoneSettings,
     scene.SceneSettings,
-    verify.VerifySettings,
-    brresimport.ImportSettings,
-    brresexport.ExportSettings,
     # ui
     material.MatPanel,
     tev.TevPanel,

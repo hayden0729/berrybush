@@ -177,7 +177,7 @@ def makeUniqueName(name: str, usedNames: set[str]):
 
 def getPropName(data, p: str):
     """Get the name of a property from its parent data and ID."""
-    return data.bl_rna.properties[p].name
+    return data.rna_type.properties[p].name # use rna_type over bl_rna bc it works w/ operator props
 
 
 def drawIcon(layout: bpy.types.UILayout, icon: str | int):
