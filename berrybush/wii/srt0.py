@@ -182,7 +182,7 @@ class MatAnimWriter(MatAnimSerializer["SRT0Writer"], Writer, StrPoolWriteMixin):
     def fromInstance(self, data: MatAnim):
         super().fromInstance(data)
         texAnims = sorted(data.texAnims.items(), key=lambda item: item[0])
-        indAnims = sorted(data.texAnims.items(), key=lambda item: item[0])
+        indAnims = sorted(data.indAnims.items(), key=lambda item: item[0])
         anims = texAnims + indAnims
         animWriterOffset = self.offset + self._HEAD_STRCT.size + 4 * len(anims)
         for idx, anim in anims:
