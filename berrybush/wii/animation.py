@@ -442,7 +442,7 @@ class CompressedDiscAnimSerializer(DiscreteAnimSerializer, CompressedAnimSeriali
         base = vals.min()
         step = self.step if self.step is not None else self.findStep(vals, base, vals.max() - base)
         vals = ((vals - base) / step + .5).astype(self._FRAME_TYPE)
-        return self._HEAD_STRCT.pack(step, base) + vals.tobytes()
+        return self._HEAD_STRCT.pack(step, base) + pad(vals.tobytes(), 4)
 
 
 class D1(CompressedDiscAnimSerializer):
