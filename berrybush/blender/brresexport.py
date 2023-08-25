@@ -842,10 +842,12 @@ class BRRESChrExporter(BRRESAnimExporter[chr0.CHR0]):
         chrAnim = self.getAnim(track.name, action)
         usedJointNames = {jointAnim.jointName for jointAnim in chrAnim.jointAnims}
         jointAnims: dict[bpy.types.PoseBone, chr0.JointAnim] = {}
+        animFmts = [animation.I12, animation.D4, animation.I12] # formats for s, r, t respectively
         for bone, frameVals in jointFrames.items():
             if bone.name in usedJointNames:
                 continue # ignore bones already in chr0, in case it already existed from another rig
             jointAnims[bone] = jointAnim = chr0.JointAnim(bone.name)
+            jointAnim.animFmts[:] = animFmts
             if bone.bone.inherit_scale == 'NONE':
                 jointAnim.segScaleComp = True
                 try:

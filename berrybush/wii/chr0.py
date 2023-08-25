@@ -70,6 +70,12 @@ class JointAnim():
         self.segScaleComp = False
         self.segScaleCompParent = False # at least one child of this joint has ssc enabled
         self.hierarchicalScale = False
+        self.animFmts: list[type[AnimSerializer]] = [type(None)] * 3
+        """Formats for scale, rotation, and translation respectively used for packing.
+
+        Eventually, you'll be able to set these to NoneType for automatic detection, but for now
+        they must be manually set.
+        """
 
 
 class JointAnimSerializer(Serializer[CHR0_SER_T, JointAnim]):
@@ -91,7 +97,8 @@ class JointAnimReader(JointAnimSerializer["CHR0Reader"], Reader, StrPoolReadMixi
         anim.hierarchicalScale = c.hierarchicalScale
         o = self._HEAD_STRCT.size
         baseOffset = self.offset
-        fmtS, fmtR, fmtT = (self._KEYFRAME_FMTS[fmt] for fmt in (c.fmtS, c.fmtR, c.fmtT))
+        anim.animFmts = [self._KEYFRAME_FMTS[fmt] for fmt in (c.fmtS, c.fmtR, c.fmtT)]
+        fmtS, fmtR, fmtT = anim.animFmts
         l = self.parentSer.length
         o += readFrameRefs(data, baseOffset, o, c.isoS, c.mdlS, c.fixS, c.hasS, fmtS, anim.scale, l)
         o += readFrameRefs(data, baseOffset, o, c.isoR, c.mdlR, c.fixR, c.hasR, fmtR, anim.rot, l)
@@ -116,12 +123,14 @@ class JointAnimWriter(JointAnimSerializer["CHR0Writer"], Writer, StrPoolWriteMix
     def animData(self):
         return (d for d in self._animData if isinstance(d, AnimSerializer))
 
-    def _packAnims(self, data: list[Animation], identityVal: int, fmt: type[AnimSerializer] = I12):
+    def _packAnims(self, data: list[Animation], identityVal: int, fmt: type[AnimSerializer]):
         """Process animation data for one transformation.
         
         Return a tuple that contains a bunch of info about this data (e.g., whether it's isometric,
         whether it's fixed, etc).
         """
+        if fmt is type(None):
+            fmt = I12 # autodetection not implemented yet - just default to i12
         iso = useModel = False
         fixed = [False] * len(data)
         animData: list[AnimSerializer | float] = []
@@ -142,7 +151,8 @@ class JointAnimWriter(JointAnimSerializer["CHR0Writer"], Writer, StrPoolWriteMix
                 else:
                     animData.append(None)
                     nonFixed.append(anim)
-            # until serializeAnims() is optimized, just use i12 for everything
+            # serializeAnims() needs to be rewritten for speed and stuff
+            # (so no format autodetection for now - setting to nonetype just defaults to i12 above)
             # nonFixedSers = serializeAnims(nonFixed, list(self._KEYFRAME_FMTS[1:]))
             nonFixedSers = [fmt().fromInstance(anim) for anim in nonFixed]
             if iso:
@@ -166,9 +176,10 @@ class JointAnimWriter(JointAnimSerializer["CHR0Writer"], Writer, StrPoolWriteMix
         c.segScaleComp = self._data.segScaleComp
         c.segScaleCompParent = self._data.segScaleCompParent
         c.hierarchicalScale = self._data.hierarchicalScale
-        idS, c.isoS, c.mdlS, c.fixS, c.hasS, c.fmtS, self._s = self._packAnims(data.scale, 1)
-        idR, c.isoR, c.mdlR, c.fixR, c.hasR, c.fmtR, self._r = self._packAnims(data.rot, 0, D4)
-        idT, c.isoT, c.mdlT, c.fixT, c.hasT, c.fmtT, self._t = self._packAnims(data.trans, 0)
+        fmtS, fmtR, fmtT = data.animFmts
+        idS, c.isoS, c.mdlS, c.fixS, c.hasS, c.fmtS, self._s = self._packAnims(data.scale, 1, fmtS)
+        idR, c.isoR, c.mdlR, c.fixR, c.hasR, c.fmtR, self._r = self._packAnims(data.rot, 0, fmtR)
+        idT, c.isoT, c.mdlT, c.fixT, c.hasT, c.fmtT, self._t = self._packAnims(data.trans, 0, fmtT)
         c.identityS = idS
         c.identityRT = idR and idT
         c.identitySRT = idS and idR and idT
