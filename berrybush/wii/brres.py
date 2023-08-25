@@ -40,7 +40,7 @@ class BRRES():
         """One flat tuple containing all the files of this BRRES."""
         return tuple(f for fldr in self.files.values() for f in fldr)
 
-    def search(self, fileType: type[Subfile], fileName: str):
+    def search(self, fileType: type[SUBFILE_T], fileName: str) -> SUBFILE_T:
         """Search this BRRES for a subfile with the specified type & name.
 
         Raise a ValueError if the subfile is not found.
