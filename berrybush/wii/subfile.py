@@ -3,6 +3,7 @@ from abc import abstractmethod
 from struct import Struct
 from typing import TypeVar, TYPE_CHECKING
 # internal imports
+from .binaryutils import pad
 from .serialization import Serializer, Reader, Writer, StrPoolReadMixin, StrPoolWriteMixin
 # special typing imports
 if TYPE_CHECKING:
@@ -71,6 +72,9 @@ class SubfileReader(SubfileSerializer[BRRESReader, FILE_T], Reader, StrPoolReadM
 
 class SubfileWriter(SubfileSerializer[BRRESWriter, FILE_T], Writer, StrPoolWriteMixin):
     """Writer for a BRRES subfile."""
+
+    def size(self):
+        return pad(super().size(), 4)
 
     @abstractmethod
     def pack(self):

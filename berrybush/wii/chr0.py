@@ -9,6 +9,7 @@ from .animation import (
     readFrameRefs, packFrameRefs, groupAnimWriters, serializeAnims
 )
 from .alias import alias
+from .binaryutils import pad
 from .bitstruct import BitStruct, Bits
 from .brresdict import DictReader, DictWriter
 from .serialization import Serializer, Reader, Writer, StrPoolReadMixin, StrPoolWriteMixin
@@ -144,10 +145,9 @@ class JointAnimWriter(JointAnimSerializer["CHR0Writer"], Writer, StrPoolWriteMix
                 data = data[:1]
             # get fixed data & prepare non-fixed data for format filtering
             for i, anim in enumerate(data):
-                frameVals = set(anim.keyframes[:, 1])
-                if len(frameVals) == 1:
+                if len(anim.keyframes) == 1:
                     fixed[i] = True
-                    animData.append(frameVals.pop())
+                    animData.append(anim.keyframes[0, 1])
                 else:
                     animData.append(None)
                     nonFixed.append(anim)
@@ -257,12 +257,16 @@ class CHR0Writer(CHR0Serializer, SubfileWriter):
             animWriters[a.jointName] = writer = JointAnimWriter(self, dataOffset).fromInstance(a)
             dataOffset += writer.size()
         self._animData = groupAnimWriters([list(a.animData) for a in animWriters.values()], False)
+        padAmount = 0
         for anims in self._animData:
             for anim in anims:
                 anim.offset = dataOffset
-            dataOffset += anims[0].size()
+            animSize = anims[0].size()
+            paddedSize = pad(animSize, 4)
+            padAmount = paddedSize - animSize
+            dataOffset += paddedSize
         self._jointAnims.fromInstance(animWriters)
-        self._size = dataOffset - self.offset
+        self._size = dataOffset - padAmount - self.offset # don't include pad from last anim entry
         return self
 
     def _calcSize(self):
@@ -277,5 +281,5 @@ class CHR0Writer(CHR0Serializer, SubfileWriter):
         )
         jointAnimWriters: list[JointAnimWriter] = self._jointAnims.getInstance().values()
         packedData = b"".join(w.pack() for w in jointAnimWriters)
-        packedData += b"".join(w[0].pack() for w in self._animData)
+        packedData += b"".join(pad(w[0].pack(), 4) for w in self._animData)
         return super().pack() + packedHeader + self._jointAnims.pack() + packedData

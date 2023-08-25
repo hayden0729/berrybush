@@ -6,7 +6,7 @@ from typing import TypeVar
 # 3rd party imports
 import numpy as np
 # internal imports
-from .binaryutils import maxBitVal, pad
+from .binaryutils import maxBitVal
 from .serialization import Reader, Writer
 from .subfile import Subfile
 
@@ -155,7 +155,7 @@ class InterpolatedAnimSerializer(AnimSerializer):
     _FRAME_STRCT: Struct
 
     def size(self):
-        return self._HEAD_STRCT.size + pad(self._FRAME_STRCT.size * len(self._data.keyframes), 4)
+        return self._HEAD_STRCT.size + self._FRAME_STRCT.size * len(self._data.keyframes)
 
 
 class CompressedAnimSerializer(AnimSerializer):
@@ -208,12 +208,13 @@ class CompressedAnimSerializer(AnimSerializer):
 
         If no acceptable value is found, raise a ValueError.
         """
+        if np.allclose(frameVals, frameVals[0]):
+            return 0
         for numSteps in range(maxStep, 0, -1):
             step = valRange / numSteps
             compressed = ((frameVals - base) / step + .5).astype(np.uint16)
             decompressed = base + step * compressed
-            error = np.abs(frameVals - decompressed)
-            if np.max(error) < cls.SCALE_ERROR_TOL:
+            if np.allclose(frameVals, decompressed, atol=cls.SCALE_ERROR_TOL):
                 return step
         raise ValueError("No step value found with tolerable error")
 
@@ -262,12 +263,13 @@ class CompressedInterpAnimSerializer(InterpolatedAnimSerializer, CompressedAnimS
         vals = self._data.keyframes[:, 1]
         base = vals.min()
         step = self.step if self.step is not None else self.findStep(vals, base, vals.max() - base)
-        vals = ((vals - base) / step + .5).astype(np.uint32)
+        # note: if step is 0, set it to 1 to prevent division by 0 since vals - base == 0 anyway
+        vals = ((vals - base) / (step if step != 0 else 1) + .5).astype(np.uint32)
         idcs = self._data.keyframes[:, 0]
         tans = self._data.keyframes[:, 2]
         frameScale = calcFrameScale(self._data.length)
         packedHeader = self._HEAD_STRCT.pack(len(vals), frameScale, step, base)
-        return packedHeader + pad(self._packFrames(idcs, vals, tans), 4)
+        return packedHeader + self._packFrames(idcs, vals, tans)
 
     @abstractmethod
     def _packFrames(self, frameIdcs: np.ndarray, vals: np.ndarray, tans: np.ndarray) -> bool:
@@ -396,7 +398,7 @@ class DiscreteAnimSerializer(AnimSerializer):
     def size(self):
         a = self._data
         l = self.length if self.length is not None else a.keyframes[-1, 0] - a.keyframes[0, 0]
-        return self._HEAD_STRCT.size + pad(self._FRAME_TYPE.itemsize * int(round(l + 1)), 4)
+        return self._HEAD_STRCT.size + self._FRAME_TYPE.itemsize * int(round(l + 1))
 
     def fromInstance(self, data: Animation):
         super().fromInstance(data)
@@ -448,7 +450,7 @@ class CompressedDiscAnimSerializer(DiscreteAnimSerializer, CompressedAnimSeriali
         base = vals.min()
         step = self.step if self.step is not None else self.findStep(vals, base, vals.max() - base)
         vals = ((vals - base) / step + .5).astype(self._FRAME_TYPE)
-        return self._HEAD_STRCT.pack(step, base) + pad(vals.tobytes(), 4)
+        return self._HEAD_STRCT.pack(step, base) + vals.tobytes()
 
 
 class D1(CompressedDiscAnimSerializer):
