@@ -371,8 +371,9 @@ class I12(InterpolatedAnimSerializer):
 class DiscreteAnimSerializer(AnimSerializer):
     """Format for storing animation data where a value is stored for every frame.
     
-    Note: BrawlBox & other sources call this "linear", but that's confusing imo bc it sounds like
-    linear interpolation, so I call it "discrete" instead.
+    Note: BrawlBox & other sources call this "linear" because linear interpolation is used when
+    sampling between frames, but I call it "discrete" instead because IMO that's more descriptive
+    regarding how the data is actually stored.
     """
 
     _HEAD_STRCT: Struct
