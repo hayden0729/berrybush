@@ -383,7 +383,7 @@ class DiscreteAnimSerializer(AnimSerializer):
         self.length = length
         """Total length of this animation. If None, temporarily calculated automatically on pack.
 
-        (Required to be provided for unpack - determines how many frames are read)
+        (Required to be provided for unpack, as it determines how many frames are read)
         """
 
     def _interpolated(self):
@@ -395,7 +395,12 @@ class DiscreteAnimSerializer(AnimSerializer):
     def size(self):
         a = self._data
         l = self.length if self.length is not None else a.keyframes[-1, 0] - a.keyframes[0, 0]
-        return self._HEAD_STRCT.size + pad(self._FRAME_TYPE.itemsize * int(l + 1), 4)
+        return self._HEAD_STRCT.size + pad(self._FRAME_TYPE.itemsize * int(round(l + 1)), 4)
+
+    def fromInstance(self, data: Animation):
+        super().fromInstance(data)
+        self.length = data.length
+        return self
 
     @classmethod
     def framesStorable(cls, length: int):
