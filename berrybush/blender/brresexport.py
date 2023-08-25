@@ -582,9 +582,10 @@ class BRRESMdlExporter():
                     dg.cmds.append(soloCmd)
 
     def _exportJoints(self, rigObj: bpy.types.Object):
-        boneMtcs = {bone: bone.matrix for bone in rigObj.pose.bones}
-        boneMtcs = {bone: (mtx, mtx.inverted()) for bone, mtx in boneMtcs.items()}
-        boneLocalScales = {} # for segment scale compensate calculations
+        mtcs = {bone: bone.matrix for bone in rigObj.pose.bones}
+        mtcs = {bone: (mtx, mtx.inverted()) for bone, mtx in mtcs.items()}
+        localScales = {} # for segment scale compensate calculations
+        prevRots = {} # for euler compatibility
         for poseBone in rigObj.pose.bones:
             bone = poseBone.bone
             joint = mdl0.Joint(self.joints[bone.parent.name] if bone.parent else None, bone.name)
@@ -607,7 +608,7 @@ class BRRESMdlExporter():
             # this is hard to put into words but hopefully that made sense
             joint.segScaleComp = bone.inherit_scale == 'NONE'
             # store parent-relative transform
-            srt = np.array(self.parentExporter.getLocalSRT(poseBone, boneLocalScales, boneMtcs))
+            srt = np.array(self.parentExporter.getLocalSRT(poseBone, localScales, mtcs, prevRots))
             srt[np.isclose(srt, 0, atol=0.001)] = 0
             joint.setSRT(*srt)
         for boneName, joint in self.joints.items():
@@ -808,8 +809,9 @@ class BRRESChrExporter(BRRESAnimExporter[chr0.CHR0]):
         # this means we can store matrix_basis now and access it directly later to get new values
         # rather than using bone.matrix_basis then (which is slower)
         localScales = {} # for segment scale compensate calculations
+        prevRots: dict[bpy.types.PoseBone, Euler] = {} # for euler compatibility
         lastNewFrame: dict[bpy.types.PoseBone, int] = {}
-        boneMtcs: dict[bpy.types.PoseBone, tuple[Matrix, Matrix]] = {b: (None, None) for b in bones}
+        mtcs: dict[bpy.types.PoseBone, tuple[Matrix, Matrix]] = {b: (None, None) for b in bones}
         mtcsChanged = {bone: False for bone in bones}
         for kfIdx, (frame, subframe) in enumerate(zip(roundedFrames.tolist(), subframes.tolist())):
             # note: frame_set() is incredibly expensive because it updates everything!
@@ -818,11 +820,11 @@ class BRRESChrExporter(BRRESAnimExporter[chr0.CHR0]):
             # drivers and constraints, and it's what all the standard blender exporters use
             scene.frame_set(frame, subframe=subframe)
             # update bone matrices and which ones have changed
-            for bone, (oldMtx, oldInv) in boneMtcs.items():
+            for bone, (oldMtx, oldInv) in mtcs.items():
                 mtx = bone.matrix
                 mtcsChanged[bone] = mtxChanged = mtx != oldMtx
                 if mtxChanged:
-                    boneMtcs[bone] = (mtx.copy(), mtx.inverted() if hasChild[bone] else None)
+                    mtcs[bone] = (mtx.copy(), mtx.inverted() if hasChild[bone] else None)
             # save animation data for bones w/ changed matrices or changed parent matrices
             # (this ensures all possible modes of inheritance & ssc cases are covered)
             for bone, frameVals in jointFrames.items():
@@ -833,7 +835,7 @@ class BRRESChrExporter(BRRESAnimExporter[chr0.CHR0]):
                         frameVals[lastNewFrameIdx:kfIdx] = frameVals[lastNewFrameIdx]
                     except KeyError:
                         pass
-                    frameVals[kfIdx] = self.parentExporter.getLocalSRT(bone, localScales, boneMtcs)
+                    frameVals[kfIdx] = parentExporter.getLocalSRT(bone, localScales, mtcs, prevRots)
                     lastNewFrame[bone] = kfIdx
         for bone, lastNewFrameIdx in lastNewFrame.items():
             frameVals = jointFrames[bone]
@@ -1242,7 +1244,8 @@ class BRRESExporter():
         return False
 
     def getLocalSRT(self, bone: bpy.types.PoseBone, localScales: dict[bpy.types.Bone, Vector],
-                    boneMtcs: dict[bpy.types.PoseBone, tuple[Matrix, Matrix]]):
+                    mtcs: dict[bpy.types.PoseBone, tuple[Matrix, Matrix]],
+                    prevRots: dict[bpy.types.PoseBone, Euler]):
         """Get a bone's local SRT in BRRES space based on its current pose.
 
         A dict mapping each bone processed so far to its bone-space local scale must be provided for
@@ -1251,13 +1254,16 @@ class BRRESExporter():
 
         Additionally, a dict mapping each bone to its matrix and inverse matrix should be provided
         for optimization's sake.
+
+        Finally, a dict mapping each bone to its previous rotation should be provided to ensure that
+        Euler compatibility is maintained. If not applicable, an empty dict will suffice.
         """
         # standard calculation: we define the local values via
         # bone.matrix = parent @ local t @ local r @ local s
         # so, to get them we do inv parent @ bone.matrix (w/ space conversion)
         parent = bone.parent
-        mtx: Matrix = boneMtcs[parent][1].copy() if parent else MTX_TO_BONE.to_4x4()
-        mtx @= boneMtcs[bone][0]
+        mtx: Matrix = mtcs[parent][1].copy() if parent else MTX_TO_BONE.to_4x4()
+        mtx @= mtcs[bone][0]
         # additional calculation for segment scale compensate: we define the locals via
         # bone.matrix = parent @ local t @ inv parent local s @ local r @ local s
         # so the calculation is slightly more complex:
@@ -1275,7 +1281,11 @@ class BRRESExporter():
         mtx @= self.mtxBoneFromBRRES4x4
         # finally, decompose
         s = mtx.to_scale()
-        r = mtx.to_euler()
+        try:
+            r = mtx.to_euler("XYZ", prevRots[bone])
+        except KeyError:
+            r = mtx.to_euler("XYZ")
+        prevRots[bone] = r
         t = mtx.to_translation() * self.settings.scale
         # getting euler values to convert to radians is slow af for some reason,
         # so only do that if rotation exists (all angles aren't 0)
