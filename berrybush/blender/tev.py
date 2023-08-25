@@ -510,7 +510,7 @@ class TevSettings(CustomIDPropertyGroup):
 
     @classmethod
     def getCloneSources(cls, context: bpy.types.Context):
-        return {t.name: t for t in context.scene.brres.tevConfigs}
+        return {f"{s.name}/{t.name}": t for s in bpy.data.scenes for t in s.brres.tevConfigs}
 
     @classmethod
     def defaultName(cls):
