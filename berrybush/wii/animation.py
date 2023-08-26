@@ -208,7 +208,7 @@ class CompressedAnimSerializer(AnimSerializer):
 
         If no acceptable value is found, raise a ValueError.
         """
-        if np.allclose(frameVals, frameVals[0]):
+        if np.allclose(frameVals, frameVals[0], atol=cls.SCALE_ERROR_TOL):
             return 0
         for numSteps in range(maxStep, 0, -1):
             step = valRange / numSteps

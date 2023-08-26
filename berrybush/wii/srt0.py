@@ -97,10 +97,9 @@ class TexAnimWriter(TexAnimSerializer["MatAnimWriter"], Writer, StrPoolWriteMixi
         animData: list[I12 | float] = []
         iso = all(c == data[0] for c in data) # iso: all components have the same data
         for i, anim in enumerate(data if not iso else data[:1]):
-            frameVals = set(anim.keyframes[:, 1])
-            if len(frameVals) == 1:
+            if len(anim.keyframes) == 1:
                 fixed[i] = True
-                animData.append(frameVals.pop())
+                animData.append(anim.keyframes[0, 1])
             else:
                 animData.append(I12().fromInstance(anim))
         if iso:

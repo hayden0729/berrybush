@@ -1066,6 +1066,8 @@ class BRRESSrtExporter(BRRESAnimExporter[srt0.SRT0]):
             if texProp == "rot":
                 frameVals = np.rad2deg(frameVals)
             compAnim.keyframes = np.array([frameIdcs, frameVals, [0] * len(frameIdcs)]).T
+            if len(set(frameVals)) == 1:
+                compAnim.keyframes = compAnim.keyframes[:1] # all keyframes are same, so reduce to 1
         # if mat anim is non-empty (relevant fcurves were found), update srt anim
         if matAnim.texAnims or matAnim.indAnims:
             srtAnim = self.getAnim(track.name, action)
