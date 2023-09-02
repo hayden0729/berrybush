@@ -450,8 +450,10 @@ class BRRESMdlExporter():
         uvGroups = [self._exportAttrData(mdl0.UVGroup, l, d) for l, d, i in uvData]
         # generate brres mesh for each material used
         for matSlot in usedMatSlots(obj, mesh):
-            usedLoops = triLoopIdcs[triMatIdcs == matSlot.slot_index]
             mat = matSlot.material
+            if not mat:
+                continue
+            usedLoops = triLoopIdcs[triMatIdcs == matSlot.slot_index]
             # generate brres mesh
             brresMesh = mdl0.Mesh(f"{obj.name}__{mat.name}")
             self.model.meshes.append(brresMesh)
