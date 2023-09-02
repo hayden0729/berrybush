@@ -651,7 +651,10 @@ class BRRESMdlExporter():
             return False
         if obj.parent_type == 'ARMATURE':
             return True
-        return any(m.type == 'ARMATURE' and m.object.original is self.rigObj for m in obj.modifiers)
+        for m in obj.modifiers:
+            if m.type == 'ARMATURE' and m.object is not None and m.object.original is self.rigObj:
+                return True
+        return False
 
     @classmethod
     def _tristrip(cls, tris: list[tuple[int, int, int]], maxLen: int = None):
