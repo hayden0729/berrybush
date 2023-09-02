@@ -1408,11 +1408,11 @@ class ExportBRRES(bpy.types.Operator, ExportHelper):
 
     doQuantize: bpy.props.BoolProperty(
         name="Simplify Weights",
-        description="Limit vertex weights to a fixed number of steps (good for file size & performance)", # pylint: disable=line-too-long
+        description="Quantize vertex weights to a fixed interval before normalization (good for file size, performance, & preventing crashes)", # pylint: disable=line-too-long
         default=False,
     )
 
-    quantizeSteps: bpy.props.IntProperty(
+    quantizeSteps: bpy.props.FloatProperty(
         name="Simplify Weights",
         description="Number of steps between 0 and 1 (lower -> more simplified but potentially less accurate)", # pylint: disable=line-too-long
         min=1,
