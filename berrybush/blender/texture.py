@@ -410,17 +410,16 @@ class ImgPanel(TexSubPanel):
             try:
                 texImg = texSettings.imgs[texSettings.activeImgSlot - 1]
                 activeImg = texImg.img
-                imgSettings = activeImg.brres
                 if activeImg:
                     dims = np.array(activeImg.size, dtype=int)
                     if any(bin(dim).count("1") > 1 for dim in dims):
                         drawWarningUI(
-                            layout, imgSettings, "warnSupPow2",
+                            layout, activeImg.brres, "warnSupPow2",
                             "Dimensions aren't both powers of 2"
                         )
                     if np.any(dims > gx.MAX_TEXTURE_SIZE):
                         drawWarningUI(
-                            layout, imgSettings, "warnSupSize",
+                            layout, activeImg.brres, "warnSupSize",
                             f"Dimensions aren't both <= {gx.MAX_TEXTURE_SIZE}"
                         )
                 layout.template_ID_preview(texImg, "img", new="image.new", open="image.open")
@@ -428,7 +427,7 @@ class ImgPanel(TexSubPanel):
                     imgCol = layout.column()
                     imgCol.use_property_split = True
                     imgCol.use_property_decorate = False
-                    imgCol.prop(imgSettings, "fmt")
+                    imgCol.prop(activeImg.brres, "fmt")
             except IndexError: # active slot out of bounds
                 layout.template_ID_preview(texSettings, "imgAdder",
                                            new="image.new", open="image.open")
