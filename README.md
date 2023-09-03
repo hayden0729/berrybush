@@ -7,7 +7,7 @@ Main features include:
 - Render engine and new material editing interface
 - Verifier to catch possible mistakes in model data
 
-BerryBush has been tested on Windows and MacOS. It's targeted at Blender 3.3 LTS, but works with Blender 3.4 as well. Wider support is planned in the future. A more detailed summary of BerryBush's current scope and limitations can be found [here](https://github.com/hayden0729/berrybush/wiki/Scope-and-Limitations).
+BerryBush is targeted at Blender 3.3 LTS, but works with Blender 3.4 as well. Wider support is planned in the future. A more detailed summary of BerryBush's current scope and limitations can be found [here](https://github.com/hayden0729/berrybush/wiki/Scope-and-Limitations).
 
 # Installation
 
