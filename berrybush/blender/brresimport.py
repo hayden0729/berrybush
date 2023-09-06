@@ -1,5 +1,7 @@
 # standard imports
+from cProfile import Profile
 import os
+from pstats import SortKey, Stats
 from typing import Generic, TypeVar
 # 3rd party imports
 import bpy
@@ -8,7 +10,7 @@ import bmesh
 from mathutils import Matrix
 import numpy as np
 # internal imports
-from .common import ( # pylint: disable=unused-import
+from .common import (
     MTX_FROM_BRRES, MTX_FROM_BONE, MTX_TO_BONE, LOG_PATH,
     transformAxis, solidView, restoreView, getLoopVertIdcs, enumVal, foreachGet
 )
@@ -1459,11 +1461,8 @@ class ImportBRRES(bpy.types.Operator, ImportHelper):
     )
 
     def execute(self, context):
-        import cProfile, pstats
-        from pstats import SortKey
-        pr = cProfile.Profile()
-        pr.enable()
-
+        profiler = Profile()
+        profiler.enable()
         restoreShading = solidView(context) # temporarily set viewports to solid view for speed
         context.window.cursor_set('WAIT')
         # self.report({'INFO'}, "Importing BRRES...")
@@ -1475,11 +1474,9 @@ class ImportBRRES(bpy.types.Operator, ImportHelper):
         self.report({'INFO'}, f"Imported \"{os.path.basename(self.filepath)}\"")
         context.window.cursor_set('DEFAULT')
         restoreView(restoreShading)
-
-        pr.disable()
+        profiler.disable()
         with open(LOG_PATH, "w", encoding="utf-8") as logFile:
-            ps = pstats.Stats(pr, stream=logFile).sort_stats(SortKey.CUMULATIVE)
-            ps.print_stats()
+            Stats(profiler, stream=logFile).sort_stats(SortKey.CUMULATIVE).print_stats()
         return {'FINISHED'}
 
     def draw(self, context: bpy.types.Context):
