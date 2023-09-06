@@ -355,6 +355,29 @@ class BRRESMdlExporter():
         else:
             return {j: w / weightNorm for j, w in df.items() if w > 0}
 
+    def _getVertDfs(self, obj: bpy.types.Object, settings: "ExportBRRES") -> list[mdl0.Deformer]:
+        """Get a list with the MDL0 deformer for each vertex of an object."""
+        vertDfs = [{} for _ in range(len(obj.data.vertices))]
+        for vg in obj.vertex_groups:
+            try:
+                joint = self.joints[vg.name]
+            except KeyError: # vertex group doesn't correspond to a bone
+                continue
+            for i, vertDf in enumerate(vertDfs):
+                try:
+                    vertDf[joint] = vg.weight(i)
+                except RuntimeError: # vertex not in group
+                    pass
+        for i, df in enumerate(vertDfs):
+            # normalize weights & convert dict to actual deformer
+            newDf = self._normalizeDeformer(df)
+            if settings.doQuantize:
+                # for quantization, round weights based on number of steps and then re-normalize
+                steps = settings.quantizeSteps
+                newDf = self._normalizeDeformer({j: round(w * steps) for j, w in newDf.items()})
+            vertDfs[i] = mdl0.Deformer(newDf)
+        return vertDfs
+
     def _exportMeshObj(self, obj: bpy.types.Object):
         """Export a Blender mesh object, material & all included.
 
@@ -389,25 +412,7 @@ class BRRESMdlExporter():
             # dfs: all unique deformers in vertDfs
             # vertDfIdcs: for each vert in vertDfs, index of that vert's deformer in dfs
             # dfIdcs: for each deformer in dfs, index of first vertex w/ that deformer in vertDfs
-            vertDfs = [{} for _ in range(len(mesh.vertices))]
-            for vg in obj.vertex_groups:
-                try:
-                    joint = self.joints[vg.name]
-                except KeyError: # vertex group doesn't correspond to a bone
-                    continue
-                for i, vertDf in enumerate(vertDfs):
-                    try:
-                        vertDf[joint] = vg.weight(i)
-                    except RuntimeError: # vertex not in group
-                        pass
-            for i, df in enumerate(vertDfs):
-                # normalize weights & convert dict to actual deformer
-                newDf = self._normalizeDeformer(df)
-                if settings.doQuantize:
-                    # for quantization, round weights based on number of steps and then re-normalize
-                    steps = settings.quantizeSteps
-                    newDf = self._normalizeDeformer({j: round(w * steps) for j, w in newDf.items()})
-                vertDfs[i] = mdl0.Deformer(newDf)
+            vertDfs = self._getVertDfs(obj, settings)
             vertDfHashes = np.array([hash(df) for df in vertDfs], dtype=np.int64)
             _, dfIdcs, vertDfIdcs = np.unique(vertDfHashes, return_index=True, return_inverse=True)
             dfs: list[mdl0.Deformer] = [vertDfs[i] for i in dfIdcs]
