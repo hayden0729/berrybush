@@ -34,7 +34,8 @@ def verifyBRRES(op: "VerifyBRRES", context: bpy.types.Context):
                     objUsedMats = {matSlot.material for matSlot in usedMatSlots(obj, mesh)}
                     if None in objUsedMats:
                         numProblems += 1
-                        e = f"Mesh '{mesh.name}' has geometry with no material set"
+                        e = (f"Mesh '{mesh.name}' has geometry without an assigned material "
+                              "(this will not be exported)")
                         op.report({'INFO'}, e)
                     usedMats |= objUsedMats
     # material problems
