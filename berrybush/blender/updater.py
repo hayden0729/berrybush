@@ -65,7 +65,7 @@ class UpdateBRRES(bpy.types.Operator):
                 # open vertex color gamma updater
                 bpy.ops.brres.update_vert_colors_1_1_0('INVOKE_DEFAULT')
                 currentVer = (1, 1, 0)
-            # 1.1.4
+            # 1.2.0
             if compareVers(currentVer, (1, 2, 0)) < 0:
                 # update texture transform names for fcurves
                 for mat in bpy.data.materials:
