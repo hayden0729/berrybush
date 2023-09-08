@@ -31,9 +31,15 @@ def verifyBRRES(op: "VerifyBRRES", context: bpy.types.Context):
                              f"in its BRRES settings, but has no such attribute")
                         op.report({'INFO'}, e)
                     # grab used materials for use in material verification
-                    usedMats |= {matSlot.material for matSlot in usedMatSlots(obj, mesh)}
+                    objUsedMats = {matSlot.material for matSlot in usedMatSlots(obj, mesh)}
+                    if None in objUsedMats:
+                        numProblems += 1
+                        e = f"Mesh '{mesh.name}' has geometry with no material set"
+                        op.report({'INFO'}, e)
+                    usedMats |= objUsedMats
     # material problems
     usedTevs = set()
+    usedMats.discard(None)
     for mat in usedMats:
         # textures w/o images & images w/ dimensions that aren't powers of 2
         for tex in mat.brres.textures:
