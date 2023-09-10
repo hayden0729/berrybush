@@ -339,7 +339,7 @@ class TevStageColorParams(TevStageCalcParams):
             matSettings = context.material.brres
             tevSettings = context.scene.brres.tevConfigs[matSettings.tevID]
             texIcon = tevSettings.stages.activeItem().texIcon(context)
-        except AttributeError:
+        except (AttributeError, IndexError):
             texIcon = 'TEXTURE'
         return (
             ('STANDARD_0_COLOR', "Standard Slot 1 RGB", "RGB from this material's first standard color slot", 'RESTRICT_COLOR_ON', 0), # pylint: disable=line-too-long
@@ -397,7 +397,7 @@ class TevStageAlphaParams(TevStageCalcParams):
             matSettings = context.material.brres
             tevSettings = context.scene.brres.tevConfigs[matSettings.tevID]
             texIcon = tevSettings.stages.activeItem().texIcon(context)
-        except AttributeError:
+        except (AttributeError, IndexError):
             texIcon = 'TEXTURE'
         return (
             ('STANDARD_0_ALPHA', "Standard Slot 1 Alpha", "Alpha from this stage's first standard color slot", 'RESTRICT_COLOR_ON', 0), # pylint: disable=line-too-long
