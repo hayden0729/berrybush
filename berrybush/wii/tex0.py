@@ -280,10 +280,10 @@ class RGB5A3(ListableImageFormat):
 
     @classmethod
     def _prepForExport(cls, px: np.ndarray):
-        rgb = px[..., 3] == 1
-        argb = np.invert(rgb)
         # alpha max is (max 3 bit value) + 1 because if alpha is 1, it's just disabled
         px[..., 3] *= 0b1000
+        rgb = px[..., 3].round() == 0b1000
+        argb = np.invert(rgb)
         px[argb, :3] *= 0b1111
         px[rgb, :3] *= 0b11111
         px = np.round(px).astype(int)
