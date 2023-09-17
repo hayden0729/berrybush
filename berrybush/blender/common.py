@@ -111,7 +111,7 @@ def paragraphLabel(layout: bpy.types.UILayout, text: str, widthChars = 55):
 
 
 def usedMatSlots(obj: bpy.types.Object, mesh: bpy.types.Mesh):
-    """Get the material slots of a mesh object that are used by its mesh."""
+    """Get the material slots of an object that are used by a mesh."""
     usedSlots = set(f.material_index for f in mesh.polygons)
     return (matSlot for i, matSlot in enumerate(obj.material_slots) if i in usedSlots)
 
@@ -216,14 +216,16 @@ def drawCheckedProp(layout: bpy.types.UILayout, boolData, boolProp: str,
 
 
 def foreachGet(coll: bpy.types.bpy_prop_collection, attr: str,
-               numComps = 1, dtype = np.float32) -> np.ndarray:
+               numComps = 1, dtype = np.float32, force2D = False) -> np.ndarray:
     """Quickly create an array of some attribute of a bpy_prop_collection.
 
     For instance, to get a mesh's positions, use foreachGet(mesh.vertices, "co", 3)
+
+    If numComps is set to 1, the resulting array will be 1-dimensional, unless force2D is enabled.
     """
     arr = np.empty((len(coll) * numComps), dtype)
     coll.foreach_get(attr, arr)
-    return arr.reshape((-1, numComps)) if numComps > 1 else arr
+    return arr.reshape((-1, numComps)) if numComps > 1 or force2D else arr
 
 
 def getLoopVertIdcs(mesh: bpy.types.Mesh):
@@ -277,13 +279,13 @@ def getLayerData(mesh: bpy.types.Mesh, layerNames: tuple[str],
         layer: bpy.types.Attribute = None
         if isUVLayer:
             layer = mesh.uv_layers[layerName]
-            layerData = foreachGet(layer.data, "uv", 2)
+            layerData = foreachGet(layer.data, "uv", 2, force2D=True)
         elif isGenericLayer:
             layer = mesh.attributes[layerName]
             layerCompCount = ATTR_COMP_COUNTS.get(layer.data_type, 1)
             for propName in ("value", "color", "vector"):
                 try:
-                    layerData = foreachGet(layer.data, propName, layerCompCount)
+                    layerData = foreachGet(layer.data, propName, layerCompCount, force2D=True)
                     break
                 except AttributeError:
                     pass
