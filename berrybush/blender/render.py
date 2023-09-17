@@ -158,8 +158,6 @@ def getLoopAttrs(mesh: bpy.types.Mesh, clrs: list[str] = None, uvs: list[str] = 
                         layerData = layerData[loopFaceIdcs]
                 except AttributeError:
                     pass # this is a uv layer, which implicity has per-loop (corner) domain
-                if aTypeName == "color":
-                    layerData[:, :3] **= (1 / 2.2)
                 loopAttrs[f"{aTypeName}{i}"] = aType.pad(layerData)
     return loopAttrs
 

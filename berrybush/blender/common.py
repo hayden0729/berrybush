@@ -256,7 +256,7 @@ def getLayerData(mesh: bpy.types.Mesh, layerNames: tuple[str],
 
     Optionally, data can be processed after retrieval. If the UV flag is enabled, this causes
     the Y coordinates of the data to be flipped because of differences in conventions between
-    Blender & BRRES; otherwise, this also causes the data to be clamped from 0-1.
+    Blender & BRRES; otherwise, this causes the data to be clamped from 0-1 and gamma-corrected.
     """
     uvLayers = mesh.uv_layers.keys()
     genericLayers = mesh.attributes.keys()
@@ -293,7 +293,8 @@ def getLayerData(mesh: bpy.types.Mesh, layerNames: tuple[str],
                 layerData = simplifyLayerData(layerData)
                 if isUV: # flip uvs
                     layerData[:, 1] = 1 - layerData[:, 1]
-                else: # clamp colors
+                else: # correct & clamp colors
+                    layerData[:, :3] **= (1 / 2.2)
                     layerData.clip(0, 1, out=layerData)
             if unique:
                 layerData, layerIdcs = np.unique(layerData, return_inverse=True, axis=0)

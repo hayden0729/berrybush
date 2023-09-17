@@ -315,8 +315,6 @@ class BRRESMdlExporter():
             return None
         group = groupType(f"{layer.id_data.name}__{layer.name}")
         self.model.vertGroups[groupType].append(group)
-        if groupType is mdl0.ClrGroup:
-            data[:, :3] **= (1 / 2.2)
         group.setArr(data)
         return group
 
