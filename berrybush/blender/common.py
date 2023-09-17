@@ -302,6 +302,20 @@ def getLayerData(mesh: bpy.types.Mesh, layerNames: tuple[str],
     return allData
 
 
+def layerDataLoopDomain(layer: bpy.types.Attribute, layerData: np.ndarray, layerIdcs: np.ndarray):
+    """Convert layer data retrieved by getLayerData() to the per-loop domain."""
+    if layerIdcs is not None:
+        layerData = layerData[layerIdcs]
+    try:
+        if layer.domain == 'POINT':
+            return layerData[getLoopVertIdcs(layer.id_data)]
+        elif layer.domain == 'FACE':
+            return layerData[getLoopFaceIdcs(layer.id_data)]
+    except AttributeError:
+        pass # this is a uv layer, which implicity has per-loop (corner) domain
+    return layerData
+
+
 def setLayerData(layerData: dict[bpy.types.Attribute, np.ndarray]):
     """Easily set the data for mesh attribute/UV layers. No additional processing is performed."""
     meshes: set[bpy.types.Mesh] = set()
