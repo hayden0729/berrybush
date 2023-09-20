@@ -597,6 +597,7 @@ class VertexAttrGroup():
     """Group of items for some vertex attribute, like positions or normals."""
 
     ATTR_TYPE = gx.VertexAttr
+    MAX_LEN = maxBitVal(16)
 
     def __init__(self, name: str = None, arr: np.ndarray = None, attr: ATTR_TYPE = None):
         self.name = name
@@ -618,12 +619,10 @@ class VertexAttrGroup():
     def setArr(self, arr: np.ndarray):
         """Set this group's data with another array, which is copied.
 
-        If its entries are too long (e.g., 4 elements when only 3 are supported), a ValueError is
-        raised. If entries are too short, they're padded to the proper length.
+        If its entries are too long (e.g., 4 elements when only 3 are supported), they're cropped.
+        If entries are too short, they're padded to the proper length.
         """
-        if arr.shape[-1] > self.ATTR_TYPE.PADDED_COUNT:
-            raise TypeError("Array vectors have too many components")
-        self._arr = self.ATTR_TYPE.pad(arr)
+        self._arr = self.ATTR_TYPE.pad(arr[..., :self.ATTR_TYPE.PADDED_COUNT])
 
     def genAttr(self):
         """Generate a GX vertex attribute descriptor for this group based on its data."""

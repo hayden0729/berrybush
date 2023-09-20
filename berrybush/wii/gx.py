@@ -1812,6 +1812,29 @@ class DrawTriangles(DrawPrimitives):
     def numFaces(self):
         return len(self) // 3
 
+    def strip(self):
+        """Return a list of draw commands equivalent to this one w/ tristrips for compression."""
+        stripped: list[DrawPrimitives] = []
+        verts, vertIdcs = np.unique(self.vertData, return_inverse=True, axis=0)
+        strips = tristrip(vertIdcs.reshape(-1, 3).tolist(), DrawTriangleStrip.maxLen())
+        soloTris = []
+        for strip in strips:
+            if len(strip) == 3:
+                soloTris += strip
+            else:
+                stripCmd = DrawTriangleStrip(vertData=verts[strip])
+                stripped.append(stripCmd)
+        # compile isolated triangles into their own command
+        # (multiple commands if too many to fit into one)
+        numSoloVerts = len(soloTris)
+        soloVertData = verts[soloTris]
+        maxTriLen = DrawTriangles.maxLen()
+        for vertStart in range(0, numSoloVerts, maxTriLen):
+            vertEnd = min(vertStart + maxTriLen, numSoloVerts)
+            soloCmd = DrawTriangles(vertData=soloVertData[vertStart:vertEnd])
+            stripped.append(soloCmd)
+        return stripped
+
 
 class DrawTriangleStrip(DrawPrimitives):
     OPCODE = b"\x98"
@@ -1866,6 +1889,72 @@ class DrawPoints(DrawPrimitives):
         return np.ndarray((0, 0))
     def numFaces(self):
         return 0
+
+
+def tristrip(tris: list[tuple[int, int, int]], maxLen: int = None):
+    """Convert triangles (tuples w/ 3 vertex indices) to strips (lists of vertex indices)."""
+    # this is a basic implementation that pretty much makes random lines until it can't anymore
+    # the result's not too shabby though!
+    strips: list[list[int]] = []
+    edgeAdjacentVerts: dict[tuple[int, int], list[int]] = {}
+    # create map from edges to the all their adjacent vertices
+    for tri in tris:
+        edgeAdjacentVerts.setdefault((tri[0], tri[1]), []).append(tri[2])
+        edgeAdjacentVerts.setdefault((tri[1], tri[2]), []).append(tri[0])
+        edgeAdjacentVerts.setdefault((tri[2], tri[0]), []).append(tri[1])
+    # create strips by picking arbitrary starting points and then going down arbitrary paths
+    while edgeAdjacentVerts:
+        firstEdge, firstEdgeAdjacentVerts = edgeAdjacentVerts.popitem() # pop to get edge fast
+        edgeAdjacentVerts[firstEdge] = firstEdgeAdjacentVerts # add back so item isn't removed
+        strip = list(firstEdge)
+        strips.append(strip)
+        expandTristrip(strip, edgeAdjacentVerts, maxLen)
+        # after initial strip expansion, expand it in the opposite direction as well
+        # to do this, reverse the strip, then expand it
+        # then, if reversing flipped the faces (which happens if the strip has an odd length),
+        # we have to flip them back by adding an extra vert to the beginning
+        # isFlipped = len(strip) % 2
+        # strip.reverse()
+        # expandTristrip(strip, edgeAdjacentVerts, maxLen, isReversed=True)
+        # if isFlipped:
+        #     if len(strip) % 2:
+        #         strip.reverse()
+        #     else:
+        #         strip.insert(0, strip[0]) # reverse doesn't flip faces; only way is extra vert
+        # COMMENTED OUT FOR NOW BECAUSE THE INSERTION IN THE LINE ABOVE MAKES REVERSING NOT
+        # WORTH IT (compression gains are balanced out by the extra vertices)
+    return strips
+
+
+def expandTristrip(strip: list[int], edgeAdjacentVerts: dict[tuple[int, int], list[int]],
+                   maxLen: int = None, isReversed = False):
+    """Expand a triangle strip forwards until it can't be expanded anymore."""
+    # order alternates with every entry (clockwise vs counter)
+    # isReversed determines which order to start with
+    doReverse = isReversed
+    latestEdge = tuple(strip[-2:])
+    noMaxLen = maxLen is None
+    while latestEdge in edgeAdjacentVerts and (noMaxLen or len(strip) < maxLen):
+        adjacentVerts = edgeAdjacentVerts[latestEdge]
+        newVert = adjacentVerts.pop() # pop one vert adjacent to this edge
+        strip.append(newVert)
+        tri = (*latestEdge, newVert) * 2
+        for edgeIdx in range(1, 3):
+            # in addition to deleting the data for this edge, delete the data for
+            # equivalent edges/adjacent verts
+            # for instance, the tri (1, 2, 3) will have an entry for (1, 2) to 3,
+            # (2, 3) to 1, and (3, 1) to 2; if we're looking at the (1, 2) edge, the
+            # other entries will still need to be popped as well since they represent
+            # the same tri
+            offsetEdge = tri[edgeIdx : edgeIdx + 2]
+            offsetAdjacentVerts = edgeAdjacentVerts[offsetEdge]
+            offsetAdjacentVerts.remove(tri[edgeIdx + 2])
+            if not offsetAdjacentVerts:
+                del edgeAdjacentVerts[offsetEdge]
+        if not adjacentVerts:
+            del edgeAdjacentVerts[latestEdge]
+        doReverse = not doReverse
+        latestEdge = tuple(strip[-2:][::-1]) if doReverse else tuple(strip[-2:])
 
 
 COMMANDS = {cmd.OPCODE: cmd for cmd in (

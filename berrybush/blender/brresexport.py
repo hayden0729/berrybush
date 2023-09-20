@@ -16,7 +16,7 @@ from .common import (
     MTX_TO_BONE, MTX_FROM_BONE, MTX_TO_BRRES, LOG_PATH,
     solidView, restoreView, limitIncludes, usedMatSlots, makeUniqueName, foreachGet, getLayerData,
     getLoopVertIdcs, getLoopFaceIdcs, getFaceMatIdcs, getPropName, drawCheckedProp,
-    simplifyLayerData
+    simplifyLayerData, layerDataLoopDomain
 )
 from .material import AlphaSettings, DepthSettings, LightChannelSettings, MiscMatSettings
 from .tev import TevSettings, TevStageSettings
@@ -29,7 +29,6 @@ from ..wii import (
 
 
 ANIM_SUBFILE_T = TypeVar("ANIM_SUBFILE_T", bound=animation.AnimSubfile)
-
 
 IMG_FMTS: dict[str, type[tex0.ImageFormat]] = {
     'I4': tex0.I4,
@@ -62,6 +61,297 @@ def padImgData(img: bpy.types.Image, shape: tuple[int, int, int]):
     return output
 
 
+class GeometryInfo():
+    """Calculates and stores a bunch of geometry-related arrays for Blender mesh object export."""
+
+    def __init__(self):
+        self.loopIdcs: np.ndarray = None
+        self.loopVertIdcs: np.ndarray = None
+        self.loopFaceIdcs: np.ndarray = None
+        self.triLoopIdcs: np.ndarray = None
+        self.triMatIdcs: np.ndarray = None
+        self.vertDfs: list[mdl0.Deformer] = []
+        self.dfs: list[mdl0.Deformer] = []
+        self.dfVertIdcs: list[int] = None
+        self.vertDfIdcs: np.ndarray = None
+        self.loopDfIdcs: np.ndarray = None
+        self.loopPsns: np.ndarray = None
+        self.loopNrms: np.ndarray = None
+        self.loopClrs: dict[int, tuple[str, np.ndarray]] = {}
+        self.loopUVs: dict[int, tuple[str, np.ndarray]] = {}
+
+    def update(self, mesh: bpy.types.Mesh, obj: bpy.types.Object, scale = 1.0):
+        """Update geometry data from a Blender mesh object."""
+        self.triLoopIdcs = foreachGet(mesh.loop_triangles, "loops", 3, int)[:, ::-1].flatten()
+        self.loopVertIdcs = getLoopVertIdcs(mesh)
+        self.loopFaceIdcs = getLoopFaceIdcs(mesh)
+        self.triMatIdcs = getFaceMatIdcs(mesh)[self.loopFaceIdcs][self.triLoopIdcs]
+        try:
+            # brres mesh attributes may be deleted by modifiers, so try to get from original mesh
+            # and fall back on evaluated mesh's attributes in case this fails
+            meshAttrs = obj.original.data.brres.meshAttrs
+        except AttributeError:
+            meshAttrs = mesh.brres.meshAttrs
+        vertPsns = foreachGet(mesh.vertices, "co", 3) * scale
+        self.loopPsns = vertPsns[self.loopVertIdcs]
+        self.loopNrms = foreachGet(mesh.loops, "normal", 3)
+        self.loopClrs = self._processLayerData(getLayerData(mesh, meshAttrs.clrs, False))
+        self.loopUVs = self._processLayerData(getLayerData(mesh, meshAttrs.uvs, True))
+
+    def updateSkinning(self, mesh: bpy.types.Mesh, obj: bpy.types.Object,
+                       mdlExporter: "BRRESMdlExporter"):
+        """Update skinning-related geometry data from a Blender mesh object.
+
+        Requires a BRRES MDL exporter for deformer information."""
+        # first, get several useful arrays for dealing with the mesh's deformers
+        # vertDfs: deformer for each vertex
+        # dfs: all unique deformers in vertDfs
+        # dfVertIdcs: for each deformer in dfs, index of first vertex in vertDfs
+        # vertDfIdcs: for each vert in vertDfs, index of its deformer in dfs
+        self.vertDfs = mdlExporter.getVertDfs(mesh, obj)
+        dfVertIdxMap = {df: i for i, df in enumerate(self.vertDfs)}
+        dfIdxMap = {df: i for i, df in enumerate(dfVertIdxMap)}
+        self.dfs = list(dfVertIdxMap.keys())
+        self.dfVertIdcs = [dfVertIdxMap[df] for df in self.dfs]
+        self.vertDfIdcs = np.array([dfIdxMap[df] for df in self.vertDfs], dtype=int)
+        self.loopDfIdcs = self.vertDfIdcs[self.loopVertIdcs]
+        # then, adjust positions & normals
+        # basically, vertices w/ single-joint deformers are stored relative to those joints,
+        # so we have to convert them from rest pose to that relative space
+        # note: this does not apply to multi-weight deformers,
+        # presumably because their matrices aren't guaranteed to be invertible?
+        # (for instance, imagine a deformer for 2 equally weighted joints w/ opposite rotations)
+        mdl = mdlExporter.model
+        dfMtcs = np.array([df.mtx(mdl) if len(df) == 1 else np.identity(4) for df in self.dfs])
+        invDfMtcs = np.array([np.linalg.inv(m) for m in dfMtcs])
+        loopDfMtcs = dfMtcs[self.loopDfIdcs]
+        invLoopDfMtcs = invDfMtcs[self.loopDfIdcs]
+        padPsns = np.pad(self.loopPsns, ((0, 0), (0, 1)), constant_values=1) # pad for 4x4 matmul
+        # https://stackoverflow.com/questions/35894631/multiply-array-of-vectors-with-array-of-matrices-return-array-of-vectors
+        self.loopPsns = np.einsum("ij, ijk->ik", padPsns, invLoopDfMtcs.swapaxes(1, 2))[:, :3]
+        self.loopNrms = np.einsum("ij, ijk->ik", self.loopNrms, loopDfMtcs[:, :3, :3])
+
+    def simplifyData(self):
+        """Simplify vertex attribute data for the sake of file size optimization."""
+        self.loopNrms[:] = simplifyLayerData(self.loopNrms)
+        for attrLayers in (self.loopClrs, self.loopUVs):
+            for layerName, layerData in attrLayers.values():
+                layerData[:] = simplifyLayerData(layerData)
+
+    @classmethod
+    def _processLayerData(cls, layerData: list) -> dict[int, tuple[str, np.ndarray]]:
+        """Process layer data obtained via getLayerData() to prepare it for export.
+
+        The returned dict maps slot indices to layer names & loop-domain data.
+        """
+        processed = {}
+        for i, (layer, data, idcs) in enumerate(layerData):
+            if layer:
+                processed[i] = (layer.name, layerDataLoopDomain(layer, data, idcs))
+        return processed
+
+
+class VertexAttrGroupExporter():
+    """Exports a single MDL0 vertex attribute group."""
+
+    def __init__(self, loopData: np.ndarray, attrName = ""):
+        self.attrName = attrName
+        self.loopData = loopData
+        self.groupData, self.loopDataIdcs = np.unique(loopData, return_inverse=True, axis=0)
+
+    def getName(self, baseName = "", index = 0):
+        """Generate a name for this group based on an ID for the base name & an optional index."""
+        name = baseName
+        if self.attrName:
+            name = "__".join((name, self.attrName))
+        if index:
+            name = "_".join((name, str(index)))
+        return name
+
+    def exportGroup(self, groupType: type[mdl0.VertexAttrGroup], baseName = "", index = 0):
+        """Export a group for this exporter, w/ a name based on baseName and index."""
+        return groupType(self.getName(baseName, index), self.groupData)
+
+
+class GeometrySlice():
+    """Represents a slice of a GeometryInfo containing an arbitrary subset of its triangles."""
+
+    def __init__(self, geoInfo: GeometryInfo, usedTriLoopIdcs: np.ndarray):
+        self.geoInfo = geoInfo
+        self.usedTriLoopIdcs = usedTriLoopIdcs
+        self.usedLoopIdcs = np.unique(self.usedTriLoopIdcs)
+        self.attrExporters: dict[type[mdl0.VertexAttrGroup], dict[int, VertexAttrGroupExporter]] = {
+            mdl0.PsnGroup: {0: VertexAttrGroupExporter(geoInfo.loopPsns[self.usedLoopIdcs])},
+            mdl0.NrmGroup: {0: VertexAttrGroupExporter(geoInfo.loopNrms[self.usedLoopIdcs])},
+            mdl0.ClrGroup: self.createAttrGroupExporters(geoInfo.loopClrs),
+            mdl0.UVGroup: self.createAttrGroupExporters(geoInfo.loopUVs)
+        }
+
+    def createAttrGroupExporters(self, groupInfo: dict[int, tuple[str, np.ndarray]]):
+        """Generate a dict of vertex attr group exporters from group names & data."""
+        loopFilter = self.usedLoopIdcs
+        return {i: VertexAttrGroupExporter(d[loopFilter], n) for i, (n, d) in groupInfo.items()}
+
+    def exportAttrGroups(self, meshName = "", objName = "", matName = "", sliceIdx = 0):
+        """Create all of the attribute groups for this geometry slice.
+
+        The mesh name, object name, material name, and slice index are all used for the group names.
+        """
+        exported = {}
+        for groupType, exportSlots in self.attrExporters.items():
+            exportedSlots = exported.setdefault(groupType, {})
+            baseName = "__".join((objName if groupType is mdl0.PsnGroup else meshName, matName))
+            for slot, exporter in exportSlots.items():
+                exportedSlots[slot] = exporter.exportGroup(groupType, baseName, sliceIdx)
+        return exported
+
+
+class MeshExporter():
+
+    def __init__(self, parentMdlExporter: "BRRESMdlExporter"):
+        self.parentMdlExporter = parentMdlExporter
+        self.meshes: list[mdl0.Mesh()] = []
+        self.mesh: bpy.types.Mesh = None
+        self.obj: bpy.types.Object = None
+        self._geoInfo = GeometryInfo()
+        self._singleBind: mdl0.Joint = None
+        self._visJoint: mdl0.Joint = None
+
+    def update(self, mesh: bpy.types.Mesh, obj: bpy.types.Object):
+        """Update this exporter and its parent with BRRES data based on a mesh object."""
+        parentMdlExporter = self.parentMdlExporter
+        self._singleBind = parentMdlExporter.getParentJoint(obj)
+        self._visJoint = parentMdlExporter.getVisJoint(obj)
+        self.mesh = mesh
+        self.obj = obj
+        # get geometry info
+        geoInfo = self._geoInfo
+        geoScale = parentMdlExporter.parentExporter.settings.scale
+        geoInfo.update(mesh, obj, geoScale)
+        if self._singleBind is None:
+            geoInfo.updateSkinning(mesh, obj, parentMdlExporter)
+        geoInfo.simplifyData()
+        # generate brres mesh for each material used
+        maxAttrGroupLen = mdl0.VertexAttrGroup.MAX_LEN
+        for matSlot in usedMatSlots(obj, mesh):
+            blendMat = matSlot.material
+            if not blendMat:
+                continue
+            mat = parentMdlExporter.exportMaterial(blendMat)
+            curMatTriLoopIdcs = geoInfo.triLoopIdcs[geoInfo.triMatIdcs == matSlot.slot_index]
+            for sliceIdx, triStart in enumerate(range(0, len(curMatTriLoopIdcs), maxAttrGroupLen)):
+                usedTriLoopIdcs = curMatTriLoopIdcs[triStart : triStart + maxAttrGroupLen]
+                geoSlice = GeometrySlice(geoInfo, usedTriLoopIdcs)
+                brresMesh = self.generateMesh(mat, geoSlice, sliceIdx)
+                self.meshes.append(brresMesh)
+                for groups in brresMesh.vertGroups.values():
+                    for group in groups.values():
+                        parentMdlExporter.exportAttrGroup(group)
+
+    def generateMesh(self, mat: mdl0.Material, geoSlice: GeometrySlice, sliceIdx: int):
+        """Generate a BRRES mesh & vertex groups for some geometry."""
+        sliceSuffix = f"_{sliceIdx}" if sliceIdx else ""
+        brresMesh = mdl0.Mesh(f"{self.obj.name}__{mat.name}{sliceSuffix}")
+        if self._singleBind:
+            brresMesh.singleBind = self._singleBind.deformer
+        brresMesh.visJoint = self._visJoint
+        brresMesh.vertGroups = geoSlice.exportAttrGroups(self.mesh.name, self.obj.name,
+                                                         mat.name, sliceIdx)
+        brresMesh.mat = mat
+        brresMesh.drawPrio = self.mesh.brres.drawPrio if self.mesh.brres.enableDrawPrio else 0
+        # separate primitives into draw groups
+        drawGroupData = self._getDrawGroupData(geoSlice)
+        # generate primitive commands
+        for dgDfs, dgFaces in drawGroupData:
+            dg = self._exportDrawGroup(mat, geoSlice, dgDfs, dgFaces)
+            brresMesh.drawGroups.append(dg)
+        return brresMesh
+
+    def _getDrawGroupData(self, geoSlice: GeometrySlice):
+        """Separate a geometry slice into tuples representing BRRES mesh draw groups.
+
+        Each tuple contains a set of its used deformer indices, as well as a list of arrays with its
+        loop indices.
+        """
+        # note: if skinning isn't used, we just shove everything into one draw group
+        # however, if it is used, we have to use separate draw groups because each one is limited
+        # to just 10 deformers (weighted joint combinations)
+        geoInfo = self._geoInfo
+        drawGroupData: list[tuple[set[int], list[np.ndarray]]] = []
+        if not self._singleBind:
+            # for each face, go through the existing draw groups.
+            # if there's a draw group found that supports this face (i.e., all the face's
+            # deformers are in the draw group, or it has room to add those deformers), add
+            # the face (and its deformers if necessary) to the draw group.
+            # otherwise, make a new draw group and add this face & its deformers to it.
+            # this approach feels naive, but it seems to work well enough for now
+            # (btw based on a quick code glimpse, i think this is also what brawlcrate does)
+            # for each used face
+            for face in geoSlice.usedTriLoopIdcs.reshape(-1, 3):
+                groupFound = False
+                uniqueFaceDfs = set(geoInfo.loopDfIdcs[face])
+                # go through existing draw groups
+                for dgDfs, dgFaces in drawGroupData:
+                    newDfs = uniqueFaceDfs.difference(dgDfs)
+                    # if there's a group found that supports this face (i.e., all the
+                    # face's deformers are in the draw group, or it has room to add those
+                    # deformers), add the face (and its deformers if necessary) to the
+                    # draw group
+                    if len(dgDfs) <= gx.MAX_ATTR_MTCS - len(newDfs):
+                        dgDfs |= newDfs
+                        dgFaces.append(face)
+                        groupFound = True
+                        break
+                if not groupFound:
+                    newGroup = (uniqueFaceDfs, [face])
+                    drawGroupData.append(newGroup)
+        else:
+            drawGroupData.append((set(), [geoSlice.usedTriLoopIdcs]))
+        return drawGroupData
+
+    def _exportDrawGroup(self, mat: mdl0.Material, geoSlice: GeometrySlice,
+                        dgDfs: set[int], dgFaces: list[np.ndarray]):
+        """Turn a tuple generated by getDrawGroupData() into an actual BRRES mesh draw group."""
+        dg = mdl0.DrawGroup()
+        geoInfo = self._geoInfo
+        dg.deformers = [geoInfo.vertDfs[geoInfo.dfVertIdcs[dfIdx]] for dfIdx in dgDfs]
+        # get loops used by this draw group
+        # dgAbsLoopIdcs has absolute indices, dgUsedLoopIdcs is relative to used loops
+        dgAbsLoopIdcs = np.concatenate(dgFaces)
+        dgUsedLoopIdcs = np.searchsorted(geoSlice.usedLoopIdcs, dgAbsLoopIdcs)
+        numLoops = len(dgUsedLoopIdcs)
+        # set up command w/ basic vertex attrs
+        # this is not used in the model, it's just used to store the attrs
+        # and then it's converted to triangle strips, which are stored, for compression
+        cmd = gx.DrawTriangles(numLoops)
+        cmdAttrs = (cmd.psns, cmd.nrms, cmd.clrs, cmd.uvs)
+        for groups, cmdAttr in zip(geoSlice.attrExporters.values(), cmdAttrs):
+            for groupExp, cmdData in zip(groups.values(), cmdAttr):
+                cmdData[:] = groupExp.loopDataIdcs[dgUsedLoopIdcs]
+        # then set up matrix attrs (for skinning)
+        if dgDfs:
+            # we have absolute df indices, but we need relative to this dg's df list
+            # we get this using np.searchsorted(), based on this
+            # https://stackoverflow.com/questions/8251541/numpy-for-every-element-in-one-array-find-the-index-in-another-array
+            # (accepted answer, not most upvoted; latter answers the wrong question)
+            dgAbsLoopDfs = geoInfo.loopDfIdcs[dgAbsLoopIdcs] # abs df index for each loop in dg
+            dgDfs = np.array(tuple(dgDfs))
+            sortedDgDfIdcs = np.argsort(dgDfs)
+            sortedDgDfs = dgDfs[sortedDgDfIdcs]
+            dgLoopDfs = sortedDgDfIdcs[np.searchsorted(sortedDgDfs, dgAbsLoopDfs)]
+            dgLoopDfs = dgLoopDfs.reshape(1, -1) # reshape for use in commands
+            # now, just put the indices (converted to addresses) in the commands
+            dgLoopPsnMtxAddrs = gx.LoadPsnMtx.idxToAddr(dgLoopDfs) // 4
+            dgLoopTexMtxAddrs = gx.LoadTexMtx.idxToAddr(dgLoopDfs) // 4
+            cmd.psnMtcs = dgLoopPsnMtxAddrs
+            for i, tex in enumerate(mat.textures):
+                if tex.mapMode is not mdl0.TexMapMode.UV:
+                    cmd.texMtcs[i] = dgLoopTexMtxAddrs
+        # apply triangle stripping & return
+        dg.cmds[:] = cmd.strip()
+        return dg
+
+
 class BRRESMdlExporter():
 
     def __init__(self, parentExporter: "BRRESExporter", rigObj: bpy.types.Object):
@@ -80,8 +370,9 @@ class BRRESMdlExporter():
         self.joints: dict[str, mdl0.Joint] = {}
         self._exportJoints(rigObj)
         # generate meshes & everything they use
-        self.mats: dict[str, mdl0.Material] = {}
+        self._mats: dict[str, mdl0.Material] = {}
         self.tevConfigs: dict[str, mdl0.TEVConfig] = {}
+        self._meshes: dict[bpy.types.Object, list[mdl0.Mesh]] = {}
         for obj in bpy.data.objects:
             if not limitIncludes(settings.limitTo, obj):
                 continue
@@ -90,7 +381,7 @@ class BRRESMdlExporter():
             parent = obj.parent
             if parent is None or parent.type != 'ARMATURE' or parent.data.name != rig.name:
                 continue
-            self._exportMeshObj(obj)
+            self.exportMeshObj(obj)
         # remove unused joints if enabled
         if settings.removeUnusedBones:
             self._removeUnusedJoints()
@@ -266,10 +557,16 @@ class BRRESMdlExporter():
         mat.lightSet = miscSettings.lightSet - 1 if miscSettings.useLightSet else -1
         mat.fogSet = miscSettings.fogSet - 1 if miscSettings.useFogSet else -1
 
-    def _exportMaterial(self, mat: bpy.types.Material):
-        """Export a Blender material, TEV & textures included, into a MDL0 model."""
+    def exportMaterial(self, mat: bpy.types.Material):
+        """Export a Blender material to a BRRES material, added to this model.
+
+        Used images are exported as well. If a BRRES material already exists
+        for this Blender material, it is returned.
+        """
+        if mat.name in self._mats:
+            return self._mats[mat.name]
         brresMat = mdl0.Material(mat.name)
-        self.mats[mat.name] = brresMat
+        self._mats[mat.name] = brresMat
         self.model.mats.append(brresMat)
         brresMatSettings = mat.brres
         # tev
@@ -304,60 +601,61 @@ class BRRESMdlExporter():
         self._exportAlphaSettings(brresMat, brresMatSettings.alphaSettings)
         self._exportDepthSettings(brresMat, brresMatSettings.depthSettings)
         self._exportMiscSettings(brresMat, brresMatSettings.miscSettings)
+        return brresMat
 
-    def _exportAttrData(self, groupType: type[mdl0.VertexAttrGroup], layer: bpy.types.Attribute,
-                        data: np.ndarray):
-        """Export a MDL0 vertex attribute group based on a mesh layer's data.
-
-        Return None & do nothing if the layer/data are None.
-        """
-        if layer is None:
+    def getParentJoint(self, obj: bpy.types.Object):
+        """Get a Blender object's MDL joint parent (None if skinning used)."""
+        if self.hasBoneParent(obj):
+            return self.joints[obj.parent_bone]
+        elif self.hasSkinning(obj):
             return None
-        group = groupType(f"{layer.id_data.name}__{layer.name}")
-        self.model.vertGroups[groupType].append(group)
-        group.setArr(data)
-        return group
+        # if we get here, object is a direct child of the armature (no bone) so make extra root
+        return self._extraRoot()
 
-    def _getParentAndApplyTransform(self, mesh: bpy.types.Mesh, obj: bpy.types.Object):
-        """Get a mesh object's MDL0 joint parent (None if skinning used).
+    def getVisJoint(self, obj: bpy.types.Object):
+        """Get a Blender object's MDL visibility joint."""
+        boneVisSuffix = ".hide"
+        boneVisSuffixLen = len(boneVisSuffix)
+        if obj.animation_data:
+            for fc in obj.animation_data.drivers:
+                if fc.data_path != "hide_viewport":
+                    continue
+                for var in fc.driver.variables:
+                    if var.type != 'SINGLE_PROP':
+                        continue
+                    dataPath = var.targets[0].data_path
+                    if dataPath.endswith(boneVisSuffix):
+                        try:
+                            # cut off ".hide" to get bone
+                            bone = self.rigObj.path_resolve(dataPath[:-boneVisSuffixLen])
+                            if not isinstance(bone, bpy.types.Bone):
+                                continue
+                        except ValueError:
+                            continue # not a bone visibility path
+                        return self.joints[bone.name]
+        # object doesn't have visibility driver, so use extra root for visibility joint
+        return self._extraRoot()
 
-        Additionally, transform the mesh based on its matrices and any relevant coordinate system
-        conversions if applicable.
+    def _applyTransform(self, mesh: bpy.types.Mesh, obj: bpy.types.Object):
         """
-        singleBindJoint: mdl0.Joint = None
+        Transform a mesh object to prep it for BRRES export.
+
+        This should only be used with temporary meshes created via to_mesh(); do not modify actual
+        blendfile data!
+        """
         modelMtx = obj.matrix_local.copy()
-        if obj.parent_type == 'BONE' and obj.parent_bone in self.joints:
-            # object is parented to single bone
-            singleBindJoint = self.joints[obj.parent_bone]
+        if self.hasBoneParent(obj):
             # object is positioned relative to bone tail, but we want relative to head, so convert
             parentLen = obj.parent.data.bones[obj.parent_bone].length
             headRel = Matrix.Translation((0, parentLen, 0))
             coordConversion = MTX_FROM_BONE.to_4x4() @ self.parentExporter.mtxBoneToBRRES.to_4x4()
             modelMtx = coordConversion @ headRel @ modelMtx
-        elif not self.hasSkinning(obj):
-            # object is parented straight to armature, so we need extra root for proper parenting
-            singleBindJoint = self._extraRoot()
-        else:
-            # skinning is used, so no single-bind joint or extra transformation needed
-            pass
         mesh.transform(MTX_TO_BRRES @ modelMtx)
-        return singleBindJoint
 
-    def _normalizeDeformer(self, df: mdl0.Deformer | dict[mdl0.Joint, float]):
-        """Return a dict representing a deformer with its weights normalized.
-
-        Weights of 0 are removed. If the deformer is empty or all its weights are 0, the returned
-        dict will only contain a weight for the model's extra root (set to 1.0).
-        """
-        weightNorm = sum(df.values())
-        if weightNorm == 0: # bind vertices w/o weights to extra root
-            return {self._extraRoot(): 1.0}
-        else:
-            return {j: w / weightNorm for j, w in df.items() if w > 0}
-
-    def _getVertDfs(self, obj: bpy.types.Object, settings: "ExportBRRES") -> list[mdl0.Deformer]:
-        """Get a list with the MDL0 deformer for each vertex of an object."""
-        vertDfs = [{} for _ in range(len(obj.data.vertices))]
+    def getVertDfs(self, mesh: bpy.types.Mesh, obj: bpy.types.Object) -> list[mdl0.Deformer]:
+        """Get a list with the MDL0 deformer for each vertex of a mesh object."""
+        settings = self.parentExporter.settings
+        vertDfs = [{} for _ in range(len(mesh.vertices))]
         for vg in obj.vertex_groups:
             try:
                 joint = self.joints[vg.name]
@@ -378,215 +676,46 @@ class BRRESMdlExporter():
             vertDfs[i] = mdl0.Deformer(newDf)
         return vertDfs
 
-    def _exportMeshObj(self, obj: bpy.types.Object):
-        """Export a Blender mesh object, material & all included.
+    def _normalizeDeformer(self, df: mdl0.Deformer | dict[mdl0.Joint, float]):
+        """Return a dict representing a deformer with its weights normalized.
 
-        Do nothing if the object doesn't support a mesh (i.e., it's a light, camera, etc).
+        Weights of 0 are removed. If the deformer is empty or all its weights are 0, the returned
+        dict will only contain a weight for the model's extra root (set to 1.0).
         """
+        weightNorm = sum(df.values())
+        if weightNorm == 0: # bind vertices w/o weights to extra root
+            return {self._extraRoot(): 1.0}
+        else:
+            return {j: w / weightNorm for j, w in df.items() if w > 0}
+
+    def exportMeshObj(self, obj: bpy.types.Object) -> list[mdl0.Mesh]:
+        """Export a Blender mesh object to a list of BRRES meshes, added to this model.
+
+        Dependencies such as materials are exported as well. If BRRES meshes already exist
+        for this object, these are returned. If the object doesn't support a mesh
+        (i.e., it's a light, camera, etc.), the returned list is empty.
+        """
+        if obj in self._meshes:
+            return self._meshes[obj]
         # generate mesh
         try:
             depsgraph = self.parentExporter.depsgraph
             mesh = obj.to_mesh(preserve_all_data_layers=True, depsgraph=depsgraph)
         except RuntimeError: # object type doesn't support meshes
-            return
-        # get parent joint if applicable & apply transform
-        singleBindJoint = self._getParentAndApplyTransform(mesh, obj)
-        # get mesh info, including positions & normals
-        settings = self.parentExporter.settings
+            return []
+        # process mesh & export to brres meshes
+        self._applyTransform(mesh, obj)
         mesh.calc_normals_split()
         mesh.calc_loop_triangles()
-        triLoopIdcs = foreachGet(mesh.loop_triangles, "loops", 3, np.integer)[:, ::-1].flatten()
-        loopVertIdcs = getLoopVertIdcs(mesh)
-        loopFaceIdcs = getLoopFaceIdcs(mesh)
-        triMatIdcs = getFaceMatIdcs(mesh)[loopFaceIdcs][triLoopIdcs]
-        psns = foreachGet(mesh.vertices, "co", 3) * settings.scale
-        nrms = foreachGet(mesh.loops, "normal", 3)
-        # get info for skinning, and adjust psns & normals if skinning is used
-        hasSkinning = singleBindJoint is None
-        vertDfs: list[mdl0.Deformer] = []
-        vertDfIdcs = np.ndarray(0)
-        dfIdcs = np.ndarray(0)
-        if hasSkinning:
-            # first, get several useful arrays for dealing with the mesh's deformers
-            # vertDfs: deformer for each vertex
-            # dfs: all unique deformers in vertDfs
-            # vertDfIdcs: for each vert in vertDfs, index of that vert's deformer in dfs
-            # dfIdcs: for each deformer in dfs, index of first vertex w/ that deformer in vertDfs
-            vertDfs = self._getVertDfs(obj, settings)
-            vertDfHashes = np.array([hash(df) for df in vertDfs], dtype=np.int64)
-            _, dfIdcs, vertDfIdcs = np.unique(vertDfHashes, return_index=True, return_inverse=True)
-            dfs: list[mdl0.Deformer] = [vertDfs[i] for i in dfIdcs]
-            # then, adjust positions & normals
-            # basically, vertices w/ single-joint deformers are stored relative to those joints,
-            # so we have to convert them from rest pose to that relative space
-            # note: this does not apply to multi-weight deformers,
-            # presumably because their matrices aren't guaranteed to be invertible?
-            # (for instance, imagine a deformer for 2 equally weighted joints w/ opposite rotations)
-            mdl = self.model
-            dfMtcs = np.array([df.mtx(mdl) if len(df) == 1 else np.identity(4) for df in dfs])
-            invDfMtcs = np.array([np.linalg.inv(m) for m in dfMtcs])
-            vertDfMtcs = dfMtcs[vertDfIdcs]
-            invVertDfMtcs = invDfMtcs[vertDfIdcs]
-            paddedPsns = np.pad(psns, ((0, 0), (0, 1)), constant_values=1) # needed for 4x4 matmul
-            # https://stackoverflow.com/questions/35894631/multiply-array-of-vectors-with-array-of-matrices-return-array-of-vectors
-            psns = np.einsum("ij, ijk->ik", paddedPsns, invVertDfMtcs.swapaxes(1, 2))[:, :3]
-            nrms = np.einsum("ij, ijk->ik", nrms, vertDfMtcs[loopVertIdcs, :3, :3])
-        # generate position group
-        psns, unqPsnInv = np.unique(psns, return_inverse=True, axis=0)
-        psnGroup = mdl0.PsnGroup(obj.name)
-        self.model.vertGroups[mdl0.PsnGroup].append(psnGroup)
-        psnGroup.setArr(psns)
-        # generate normal group
-        nrms = simplifyLayerData(nrms)
-        nrms, unqNrmInv = np.unique(nrms, return_inverse=True, axis=0)
-        nrmGroup = mdl0.NrmGroup(mesh.name)
-        self.model.vertGroups[mdl0.NrmGroup].append(nrmGroup)
-        nrmGroup.setArr(nrms)
-        # generate color & uv groups
-        try:
-            # brres mesh attributes may be deleted by modifiers, so try to get from original mesh
-            # & fall back on evaluated mesh's attributes in case this fails
-            meshAttrs = obj.original.data.brres.meshAttrs
-        except AttributeError:
-            meshAttrs = mesh.brres.meshAttrs
-        clrData = getLayerData(mesh, meshAttrs.clrs, isUV=False)
-        uvData = getLayerData(mesh, meshAttrs.uvs, isUV=True)
-        clrGroups = [self._exportAttrData(mdl0.ClrGroup, l, d) for l, d, i in clrData]
-        uvGroups = [self._exportAttrData(mdl0.UVGroup, l, d) for l, d, i in uvData]
-        # generate brres mesh for each material used
-        for matSlot in usedMatSlots(obj, mesh):
-            mat = matSlot.material
-            if not mat:
-                continue
-            usedLoops = triLoopIdcs[triMatIdcs == matSlot.slot_index]
-            # generate brres mesh
-            brresMesh = mdl0.Mesh(f"{obj.name}__{mat.name}")
-            self.model.meshes.append(brresMesh)
-            if singleBindJoint is not None:
-                brresMesh.singleBind = singleBindJoint.deformer
-            brresMesh.vertGroups = {
-                mdl0.PsnGroup: {0: psnGroup},
-                mdl0.NrmGroup: {0: nrmGroup},
-                mdl0.ClrGroup: {i: g for i, g in enumerate(clrGroups) if g is not None},
-                mdl0.UVGroup: {i: g for i, g in enumerate(uvGroups) if g is not None}
-            }
-            # visibility joint
-            boneVisSuffix = ".hide"
-            boneVisSuffixLen = len(boneVisSuffix)
-            if obj.animation_data:
-                for fc in obj.animation_data.drivers:
-                    if fc.data_path != "hide_viewport":
-                        continue
-                    for var in fc.driver.variables:
-                        if var.type != 'SINGLE_PROP':
-                            continue
-                        dataPath = var.targets[0].data_path
-                        if dataPath.endswith(boneVisSuffix):
-                            try:
-                                # cut off ".hide" to get bone
-                                bone = self.rigObj.path_resolve(dataPath[:-boneVisSuffixLen])
-                                if not isinstance(bone, bpy.types.Bone):
-                                    continue
-                            except ValueError:
-                                continue # not a bone visibility path
-                            brresMesh.visJoint = self.joints[bone.name]
-                            break
-                    if brresMesh.visJoint:
-                        break
-            if not brresMesh.visJoint:
-                # object doesn't have visibility driver, so use extra root for visibility joint
-                brresMesh.visJoint = self._extraRoot()
-            # generate material
-            if mat.name not in self.mats:
-                self._exportMaterial(mat)
-            brresMesh.mat = self.mats[mat.name]
-            brresMesh.drawPrio = mesh.brres.drawPrio if mesh.brres.enableDrawPrio else 0
-            # separate primitives into draw groups
-            drawGroupData: list[tuple[set[int], list[np.ndarray]]] = []
-            if hasSkinning:
-                # for each face, go through the existing draw groups.
-                # if there's a draw group found that supports this face (i.e., all the face's
-                # deformers are in the draw group, or it has room to add those deformers), add the
-                # face (and its deformers if necessary) to the draw group.
-                # otherwise, make a new draw group and add this face & its deformers to it.
-                # this approach seems a bit naive, but there are more important things to optimize
-                # (e.g., triangle stripping), so seeing if this can be improved isn't a priority rn
-                # (btw based on a quick code glimpse, i think this is also what brawlcrate does)
-                loopDfIdcs = vertDfIdcs[loopVertIdcs]
-                for face in usedLoops.reshape(-1, 3):
-                    groupFound = False
-                    uniqueFaceDfs = set(loopDfIdcs[face])
-                    for dgDfs, dgFaces in drawGroupData:
-                        newDfs = uniqueFaceDfs.difference(dgDfs)
-                        if len(dgDfs) <= gx.MAX_ATTR_MTCS - len(newDfs):
-                            dgDfs |= newDfs
-                            dgFaces.append(face)
-                            groupFound = True
-                            break
-                    if not groupFound:
-                        newGroup = (uniqueFaceDfs, [face])
-                        drawGroupData.append(newGroup)
-            else:
-                drawGroupData.append((set(), [usedLoops]))
-            # generate primitive commands
-            maxStripLen = gx.DrawTriangleStrip.maxLen()
-            maxTriLen = gx.DrawTriangles.maxLen()
-            for dgDfs, dgFaces in drawGroupData:
-                dg = mdl0.DrawGroup()
-                brresMesh.drawGroups.append(dg)
-                dg.deformers = [vertDfs[dfIdcs[dfIdx]] for dfIdx in dgDfs]
-                dgLoopIdcs = np.concatenate(dgFaces)
-                numLoops = len(dgLoopIdcs)
-                dgVertIdcs = loopVertIdcs[dgLoopIdcs]
-                dgFaceIdcs = loopFaceIdcs[dgLoopIdcs]
-                # set up command w/ basic vertex attrs
-                # this is not used in the model, it's just used to store the attrs
-                # and then it's converted to triangle strips, which are stored, for compression
-                cmd = gx.DrawTriangles(numLoops)
-                cmd.psns = unqPsnInv[dgVertIdcs].reshape(1, -1)
-                cmd.nrms = unqNrmInv[dgLoopIdcs].reshape(1, -1)
-                domains = {'POINT': dgVertIdcs, 'FACE': dgFaceIdcs}
-                for attrData, cmdAttr in zip((clrData, uvData), (cmd.clrs, cmd.uvs)):
-                    for (layer, data, idcs), cmdData in zip(attrData, cmdAttr):
-                        if layer is not None:
-                            domain = layer.domain if hasattr(layer, "domain") else 'CORNER'
-                            cmdData[:] = idcs[domains.get(domain, dgLoopIdcs)]
-                # then set up matrix attrs (for skinning)
-                if dgDfs:
-                    # we have absolute df indices, but we need relative to this draw group's df list
-                    # we get this using np.searchsorted(), based on this
-                    # https://stackoverflow.com/questions/8251541/numpy-for-every-element-in-one-array-find-the-index-in-another-array
-                    # (accepted answer, not most upvoted; most upvoted answers the wrong question)
-                    dgLoopAbsDfs = loopDfIdcs[dgLoopIdcs] # absolute df index for each loop in dg
-                    dgDfs = np.array(tuple(dgDfs))
-                    sortedDgDfIdcs = np.argsort(dgDfs)
-                    dgLoopDfs = sortedDgDfIdcs[np.searchsorted(dgDfs[sortedDgDfIdcs], dgLoopAbsDfs)]
-                    dgLoopDfs = dgLoopDfs.reshape(1, -1) # reshape for use in commands
-                    # now, just put the indices (converted to addresses) in the commands
-                    dgLoopPsnMtxAddrs = gx.LoadPsnMtx.idxToAddr(dgLoopDfs) // 4
-                    dgLoopTexMtxAddrs = gx.LoadTexMtx.idxToAddr(dgLoopDfs) // 4
-                    cmd.psnMtcs = dgLoopPsnMtxAddrs
-                    for i, tex in enumerate(self.mats[mat.name].textures):
-                        if tex.mapMode is not mdl0.TexMapMode.UV:
-                            cmd.texMtcs[i] = dgLoopTexMtxAddrs
-                # apply triangle stripping for compression
-                verts, vertIdcs = np.unique(cmd.vertData, return_inverse=True, axis=0)
-                strips = self._tristrip(vertIdcs.reshape(-1, 3).tolist(), maxStripLen)
-                soloTris = []
-                for strip in strips:
-                    if len(strip) == 3:
-                        soloTris += strip
-                    else:
-                        stripCmd = gx.DrawTriangleStrip(vertData=verts[strip])
-                        dg.cmds.append(stripCmd)
-                # compile isolated triangles into their own command
-                # (multiple commands if too many to fit into one)
-                numSoloVerts = len(soloTris)
-                soloVertData = verts[soloTris]
-                for vertStart in range(0, numSoloVerts, maxTriLen):
-                    vertEnd = min(vertStart + maxTriLen, numSoloVerts)
-                    soloCmd = gx.DrawTriangles(vertData=soloVertData[vertStart:vertEnd])
-                    dg.cmds.append(soloCmd)
+        meshExporter = MeshExporter(self)
+        meshExporter.update(mesh, obj)
+        # add to this model & return
+        self.model.meshes += meshExporter.meshes
+        self._meshes[obj] = meshExporter.meshes
+        return meshExporter.meshes
+
+    def exportAttrGroup(self, group: mdl0.VertexAttrGroup):
+        self.model.vertGroups[type(group)].append(group)
 
     def _exportJoints(self, rigObj: bpy.types.Object):
         mtcs = {bone: bone.matrix for bone in rigObj.pose.bones}
@@ -652,8 +781,16 @@ class BRRESMdlExporter():
             if joint not in usedJoints and not joint.children:
                 joint.parent = None # disconnect joint from model
 
+    def hasBoneParent(self, obj: bpy.types.Object):
+        """True if an object is a child of a bone in this exporter's armature."""
+        return (
+            obj.parent.original is self.rigObj
+            and obj.parent_type == 'BONE'
+            and obj.parent_bone in self.joints
+        )
+
     def hasSkinning(self, obj: bpy.types.Object):
-        """True if an object uses this exporter"s armature for deformation. (Not just parenting)"""
+        """True if an object uses this exporter's armature for deformation. (Not just parenting)"""
         if obj.parent.original is not self.rigObj or obj.parent_type == 'BONE':
             return False
         if obj.parent_type == 'ARMATURE':
@@ -662,72 +799,6 @@ class BRRESMdlExporter():
             if m.type == 'ARMATURE' and m.object is not None and m.object.original is self.rigObj:
                 return True
         return False
-
-    @classmethod
-    def _tristrip(cls, tris: list[tuple[int, int, int]], maxLen: int = None):
-        """Convert triangles (tuples w/ 3 vertex indices) to strips (lists of vertex indices)."""
-        # this is a basic implementation that pretty much makes random lines until it can't anymore
-        # the result's not too shabby though!
-        strips: list[list[int]] = []
-        edgeAdjacentVerts: dict[tuple[int, int], list[int]] = {}
-        # create map from edges to the all their adjacent vertices
-        for tri in tris:
-            edgeAdjacentVerts.setdefault((tri[0], tri[1]), []).append(tri[2])
-            edgeAdjacentVerts.setdefault((tri[1], tri[2]), []).append(tri[0])
-            edgeAdjacentVerts.setdefault((tri[2], tri[0]), []).append(tri[1])
-        # create strips by picking arbitrary starting points and then going down arbitrary paths
-        while edgeAdjacentVerts:
-            firstEdge, firstEdgeAdjacentVerts = edgeAdjacentVerts.popitem() # pop to get edge fast
-            edgeAdjacentVerts[firstEdge] = firstEdgeAdjacentVerts # add back so item isn't removed
-            strip = list(firstEdge)
-            strips.append(strip)
-            cls._expandTristrip(strip, edgeAdjacentVerts, maxLen)
-            # after initial strip expansion, expand it in the opposite direction as well
-            # to do this, reverse the strip, then expand it
-            # then, if reversing flipped the faces (which happens if the strip has an odd length),
-            # we have to flip them back by adding an extra vert to the beginning
-            # isFlipped = len(strip) % 2
-            # strip.reverse()
-            # cls._expandTristrip(strip, edgeAdjacentVerts, maxLen, isReversed=True)
-            # if isFlipped:
-            #     if len(strip) % 2:
-            #         strip.reverse()
-            #     else:
-            #         strip.insert(0, strip[0]) # reverse doesn't flip faces; only way is extra vert
-            # COMMENTED OUT FOR NOW BECAUSE THE INSERTION IN THE LINE ABOVE MAKES REVERSING NOT
-            # WORTH IT (compression gains are balanced out by the extra vertices)
-        return strips
-
-    @classmethod
-    def _expandTristrip(cls, strip: list[int], edgeAdjacentVerts: dict[tuple[int, int], list[int]],
-                        maxLen: int = None, isReversed = False):
-        """Expand a triangle strip forwards until it can't be expanded anymore."""
-        # order alternates with every entry (clockwise vs counter)
-        # isReversed determines which order to start with
-        doReverse = isReversed
-        latestEdge = tuple(strip[-2:])
-        noMaxLen = maxLen is None
-        while latestEdge in edgeAdjacentVerts and (noMaxLen or len(strip) < maxLen):
-            adjacentVerts = edgeAdjacentVerts[latestEdge]
-            newVert = adjacentVerts.pop() # pop one vert adjacent to this edge
-            strip.append(newVert)
-            tri = (*latestEdge, newVert) * 2
-            for edgeIdx in range(1, 3):
-                # in addition to deleting the data for this edge, delete the data for
-                # equivalent edges/adjacent verts
-                # for instance, the tri (1, 2, 3) will have an entry for (1, 2) to 3,
-                # (2, 3) to 1, and (3, 1) to 2; if we're looking at the (1, 2) edge, the
-                # other entries will still need to be popped as well since they represent
-                # the same tri
-                offsetEdge = tri[edgeIdx : edgeIdx + 2]
-                offsetAdjacentVerts = edgeAdjacentVerts[offsetEdge]
-                offsetAdjacentVerts.remove(tri[edgeIdx + 2])
-                if not offsetAdjacentVerts:
-                    del edgeAdjacentVerts[offsetEdge]
-            if not adjacentVerts:
-                del edgeAdjacentVerts[latestEdge]
-            doReverse = not doReverse
-            latestEdge = tuple(strip[-2:][::-1]) if doReverse else tuple(strip[-2:])
 
 
 class BRRESAnimExporter(Generic[ANIM_SUBFILE_T]):
@@ -1129,14 +1200,17 @@ class BRRESVisExporter(BRRESAnimExporter[vis0.VIS0]):
 
 class BRRESExporter():
 
-    def __init__(self, context: bpy.types.Context, file, settings: "ExportBRRES",
-                 baseData: bytes = b""):
+    def __init__(self, settings: "ExportBRRES"):
         self.res = brres.BRRES()
-        self.context = context
-        self.depsgraph = context.evaluated_depsgraph_get()
         self.settings = settings
+        self.context: bpy.types.Context = None
+        self.depsgraph: bpy.types.Depsgraph = None
         self.models: dict[bpy.types.Object, BRRESMdlExporter] = {}
         self.images: dict[bpy.types.Image, tex0.TEX0] = {}
+        self.anims: dict[type[BRRESAnimExporter], dict[str, animation.AnimSubfile]]
+        self.anims = {t: {} for t in (
+            BRRESChrExporter, BRRESClrExporter, BRRESPatExporter, BRRESSrtExporter, BRRESVisExporter
+        )}
         self.onlyUsedImg = settings.doImg and not settings.includeUnusedImg
         # set up bone axis conversion matrices
         self.mtxBoneToBRRES: Matrix = axis_conversion(
@@ -1148,14 +1222,12 @@ class BRRESExporter():
         self.mtxBoneFromBRRES: Matrix = self.mtxBoneToBRRES.inverted()
         self.mtxBoneToBRRES4x4 = self.mtxBoneToBRRES.to_4x4()
         self.mtxBoneFromBRRES4x4 = self.mtxBoneFromBRRES.to_4x4()
-        # generate models & animations
-        # note: originally i used the depsgraph instead of bpy.data, but that sometimes comes with
-        # warnings & crashes and can generally be hard to predict, so i just do things this way and
-        # use the depsgraph only when needed (e.g., evaluating meshes)
-        self.anims: dict[type[BRRESAnimExporter], dict[str, animation.AnimSubfile]]
-        self.anims = {t: {} for t in (
-            BRRESChrExporter, BRRESClrExporter, BRRESPatExporter, BRRESSrtExporter, BRRESVisExporter
-        )}
+
+    def update(self, context: bpy.types.Context):
+        """Update this exporter's BRRES data based on the current Blender context & data."""
+        self.context = context
+        self.depsgraph = context.evaluated_depsgraph_get()
+        settings = self.settings
         if settings.includeUnusedImg:
             # export all images
             # (if this setting's disabled, image export is handled by model/anim exporters)
@@ -1180,7 +1252,7 @@ class BRRESExporter():
                                 self._exportAnim(BRRESVisExporter, track)
         if settings.doAnim and settings.includeMatAnims:
             # finally, export material animations
-            mats = {bpy.data.materials[mat] for mdl in self.models.values() for mat in mdl.mats}
+            mats = {bpy.data.materials[mat] for mdl in self.models.values() for mat in mdl._mats}
             for mat in mats:
                 if mat.animation_data:
                     usedNames = set()
@@ -1195,24 +1267,30 @@ class BRRESExporter():
             # optimized, since geometry data doesn't have to be processed in this case, but this is
             # rarely even a useful setting so for now, idrc)
             self.res.files.pop(mdl0.MDL0, None)
+
+    def merge(self, baseRes: brres.BRRES):
+        for fType, folder in self.res.files.items():
+            # get files from base folder & new folder and overwrite those w/ same names
+            baseFolder = baseRes.folder(fType)
+            baseFiles = {f.name: f for f in baseFolder}
+            newFiles = {f.name: f for f in folder}
+            baseFolder[:] = (baseFiles | newFiles).values() # in conflicts, new files win
+        self.res = baseRes
+
+    @classmethod
+    def export(cls, context: bpy.types.Context, settings: "ExportBRRES", baseData = b""):
+        exporter = cls(settings)
+        exporter.update(context)
         # optionally merge with existing file
         if settings.doMerge and baseData:
-            baseRes = brres.BRRES.unpack(baseData)
-            for fType, folder in self.res.files.items():
-                # get files from base folder & new folder and overwrite those w/ same names
-                baseFolder = baseRes.folder(fType)
-                baseFiles = {f.name: f for f in baseFolder}
-                newFiles = {f.name: f for f in folder}
-                baseFolder[:] = (baseFiles | newFiles).values() # in conflicts, new files win
-            self.res = baseRes
+            exporter.merge(brres.BRRES.unpack(baseData))
         # write file
-        self.res.sort()
-        packed = self.res.pack()
+        exporter.res.sort()
+        packed = exporter.res.pack()
         packed += binaryutils.pad(f"BerryBush {verStr(addonVer())}".encode("ascii"), 16)
         if settings.padEnable:
             packed = binaryutils.pad(packed, settings.padSize * int(settings.padUnit))
-        # copy = brres.BRRES.unpack(packed)
-        file.write(packed)
+        return packed
 
     def _exportModel(self, rigObj: bpy.types.Object):
         self.models[rigObj] = BRRESMdlExporter(self, rigObj)
@@ -1493,6 +1571,21 @@ class ExportBRRES(bpy.types.Operator, ExportHelper):
         default=1
     )
 
+    def verify(self, context: bpy.types.Context):
+        """Run the BRRES verifier based on the data exported by this exporter."""
+        name = f"\"{os.path.basename(self.filepath)}\""
+        warns, suppressed = verifyBRRES(self, context)
+        if warns:
+            plural = "s" if warns > 1 else ""
+            sup = f" and {suppressed} suppressed" if suppressed else ""
+            e = f"Exported {name} with {warns} warning{plural}{sup}. Check the Info Log for details"
+            self.report({'WARNING'}, e)
+        elif suppressed:
+            plural = "s" if suppressed > 1 else ""
+            self.report({'INFO'}, f"Exported {name} with {suppressed} suppressed warning{plural}")
+        else:
+            self.report({'INFO'}, f"Exported {name} without any warnings")
+
     def execute(self, context):
         profiler = Profile()
         profiler.enable()
@@ -1513,19 +1606,8 @@ class ExportBRRES(bpy.types.Operator, ExportHelper):
             except FileNotFoundError:
                 pass
         with open(self.filepath, "wb") as f: # export main file
-            BRRESExporter(context, f, self, baseData)
-        name = f"\"{os.path.basename(self.filepath)}\""
-        warns, suppressed = verifyBRRES(self, context)
-        if warns:
-            plural = "s" if warns > 1 else ""
-            sup = f" and {suppressed} suppressed" if suppressed else ""
-            e = f"Exported {name} with {warns} warning{plural}{sup}. Check the Info Log for details"
-            self.report({'WARNING'}, e)
-        elif suppressed:
-            plural = "s" if suppressed > 1 else ""
-            self.report({'INFO'}, f"Exported {name} with {suppressed} suppressed warning{plural}")
-        else:
-            self.report({'INFO'}, f"Exported {name} without any warnings")
+            f.write(BRRESExporter.export(context, self, baseData))
+        self.verify(context)
         context.window.cursor_set('DEFAULT')
         restoreView(restoreShading)
         profiler.disable()
