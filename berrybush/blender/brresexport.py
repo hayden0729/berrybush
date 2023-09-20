@@ -226,7 +226,7 @@ class MeshExporter():
         self.obj = obj
         # get geometry info
         geoInfo = self._geoInfo
-        geoScale = parentMdlExporter.parentExporter.settings.scale
+        geoScale = parentMdlExporter.parentResExporter.settings.scale
         geoInfo.update(mesh, obj, geoScale)
         if self._singleBind is None:
             geoInfo.updateSkinning(mesh, obj, parentMdlExporter)
@@ -354,18 +354,18 @@ class MeshExporter():
 
 class BRRESMdlExporter():
 
-    def __init__(self, parentExporter: "BRRESExporter", rigObj: bpy.types.Object):
-        settings = parentExporter.settings
-        self.parentExporter = parentExporter
+    def __init__(self, parentResExporter: "BRRESExporter", rigObj: bpy.types.Object):
+        settings = parentResExporter.settings
+        self.parentResExporter = parentResExporter
         self.model = mdl0.MDL0(rigObj.name)
         self.rigObj = rigObj
-        self.parentExporter.res.folder(mdl0.MDL0).append(self.model)
+        self.parentResExporter.res.folder(mdl0.MDL0).append(self.model)
         # generate joints
         rig: bpy.types.Armature = rigObj.data
         restorePosePosition = rig.pose_position
         if not settings.useCurrentPose:
             rig.pose_position = 'REST' # temporarily put rig in rest position (pose restored at end)
-            parentExporter.depsgraph.update()
+            parentResExporter.depsgraph.update()
         self._hasExtraRoot = settings.forceRootBones and len(rig.bones) > 0
         self.joints: dict[str, mdl0.Joint] = {}
         self._exportJoints(rigObj)
@@ -377,7 +377,7 @@ class BRRESMdlExporter():
             if not limitIncludes(settings.limitTo, obj):
                 continue
             if settings.applyModifiers:
-                obj: bpy.types.Object = obj.evaluated_get(parentExporter.depsgraph)
+                obj: bpy.types.Object = obj.evaluated_get(parentResExporter.depsgraph)
             parent = obj.parent
             if parent is None or parent.type != 'ARMATURE' or parent.data.name != rig.name:
                 continue
@@ -454,12 +454,12 @@ class BRRESMdlExporter():
         # image
         uiImg = texSettings.activeImg
         if uiImg is not None:
-            if uiImg not in self.parentExporter.images and self.parentExporter.onlyUsedImg:
-                self.parentExporter.exportImg(uiImg)
+            if uiImg not in self.parentResExporter.images and self.parentResExporter.onlyUsedImg:
+                self.parentResExporter.exportImg(uiImg)
         # texture
         tex = mdl0.Texture()
         parentMat.textures.append(tex)
-        tex.imgName = self.parentExporter.imgName(uiImg)
+        tex.imgName = self.parentResExporter.imgName(uiImg)
         t = texSettings.transform
         tex.setSRT(t.scale, [np.rad2deg(t.rotation)], t.translation)
         try:
@@ -571,7 +571,8 @@ class BRRESMdlExporter():
         brresMatSettings = mat.brres
         # tev
         try:
-            tevSettings = self.parentExporter.context.scene.brres.tevConfigs[brresMatSettings.tevID]
+            tevConfigs = self.parentResExporter.context.scene.brres.tevConfigs
+            tevSettings = tevConfigs[brresMatSettings.tevID]
             if tevSettings.name not in self.tevConfigs:
                 self._exportTEVConfig(tevSettings)
             brresMat.tevConfig = self.tevConfigs[tevSettings.name]
@@ -648,13 +649,14 @@ class BRRESMdlExporter():
             # object is positioned relative to bone tail, but we want relative to head, so convert
             parentLen = obj.parent.data.bones[obj.parent_bone].length
             headRel = Matrix.Translation((0, parentLen, 0))
-            coordConversion = MTX_FROM_BONE.to_4x4() @ self.parentExporter.mtxBoneToBRRES.to_4x4()
+            mtxBoneToBRRES = self.parentResExporter.mtxBoneToBRRES.to_4x4()
+            coordConversion = MTX_FROM_BONE.to_4x4() @ mtxBoneToBRRES
             modelMtx = coordConversion @ headRel @ modelMtx
         mesh.transform(MTX_TO_BRRES @ modelMtx)
 
     def getVertDfs(self, mesh: bpy.types.Mesh, obj: bpy.types.Object) -> list[mdl0.Deformer]:
         """Get a list with the MDL0 deformer for each vertex of a mesh object."""
-        settings = self.parentExporter.settings
+        settings = self.parentResExporter.settings
         vertDfs = [{} for _ in range(len(mesh.vertices))]
         for vg in obj.vertex_groups:
             try:
@@ -699,7 +701,7 @@ class BRRESMdlExporter():
             return self._meshes[obj]
         # generate mesh
         try:
-            depsgraph = self.parentExporter.depsgraph
+            depsgraph = self.parentResExporter.depsgraph
             mesh = obj.to_mesh(preserve_all_data_layers=True, depsgraph=depsgraph)
         except RuntimeError: # object type doesn't support meshes
             return []
@@ -718,6 +720,7 @@ class BRRESMdlExporter():
         self.model.vertGroups[type(group)].append(group)
 
     def _exportJoints(self, rigObj: bpy.types.Object):
+        parentResExporter = self.parentResExporter
         mtcs = {bone: bone.matrix for bone in rigObj.pose.bones}
         mtcs = {bone: (mtx, mtx.inverted()) for bone, mtx in mtcs.items()}
         localScales = {} # for segment scale compensate calculations
@@ -744,7 +747,7 @@ class BRRESMdlExporter():
             # this is hard to put into words but hopefully that made sense
             joint.segScaleComp = bone.inherit_scale == 'NONE'
             # store parent-relative transform
-            srt = np.array(self.parentExporter.getLocalSRT(poseBone, localScales, mtcs, prevRots))
+            srt = np.array(parentResExporter.getLocalSRT(poseBone, localScales, mtcs, prevRots))
             srt[np.isclose(srt, 0, atol=0.001)] = 0
             joint.setSRT(*srt)
         for boneName, joint in self.joints.items():
@@ -805,8 +808,8 @@ class BRRESAnimExporter(Generic[ANIM_SUBFILE_T]):
 
     ANIM_TYPE: type[ANIM_SUBFILE_T]
 
-    def __init__(self, parentExporter: "BRRESExporter", track: bpy.types.NlaTrack):
-        self.parentExporter = parentExporter
+    def __init__(self, parentResExporter: "BRRESExporter", track: bpy.types.NlaTrack):
+        self.parentResExporter = parentResExporter
         self.track = track
 
     def getAnim(self, name: str, action: bpy.types.Action) -> ANIM_SUBFILE_T:
@@ -818,16 +821,17 @@ class BRRESAnimExporter(Generic[ANIM_SUBFILE_T]):
         the provided action.
         """
         try:
-            anim = self.parentExporter.anims[type(self)][name]
+            anim = self.parentResExporter.anims[type(self)][name]
         except KeyError:
             anim = self.ANIM_TYPE(name)
-            self.parentExporter.anims[type(self)][name] = anim
-            self.parentExporter.res.folder(self.ANIM_TYPE).append(anim)
+            self.parentResExporter.anims[type(self)][name] = anim
+            self.parentResExporter.res.folder(self.ANIM_TYPE).append(anim)
         anim.enableLoop = action.use_cyclic
         # add 1 as brres "length" is number of frames (including both endpoints),
         # as opposed to length of frame span (which doesn't include one endpoint, and is what
         # we have here)
-        newLen = int(np.ceil(action.frame_range[1] + 1 - self.parentExporter.settings.frameStart))
+        frameStart = self.parentResExporter.settings.frameStart
+        newLen = int(np.ceil(action.frame_range[1] + 1 - frameStart))
         anim.length = max(anim.length, newLen)
         return anim
 
@@ -836,13 +840,13 @@ class BRRESChrExporter(BRRESAnimExporter[chr0.CHR0]):
 
     ANIM_TYPE = chr0.CHR0
 
-    def __init__(self, parentExporter: "BRRESExporter", track: bpy.types.NlaTrack):
-        super().__init__(parentExporter, track)
+    def __init__(self, parentResExporter: "BRRESExporter", track: bpy.types.NlaTrack):
+        super().__init__(parentResExporter, track)
         # get action & rig object
         # also, get some settings we'll have to alter for baking so we can restore them later
-        settings = parentExporter.settings
-        scene = parentExporter.context.scene
-        viewLayer = parentExporter.context.view_layer
+        settings = parentResExporter.settings
+        scene = parentResExporter.context.scene
+        viewLayer = parentResExporter.context.view_layer
         strip = track.strips[0]
         action = strip.action
         frameStart, frameEnd = action.frame_range
@@ -886,10 +890,7 @@ class BRRESChrExporter(BRRESAnimExporter[chr0.CHR0]):
         hasChild = {bone: bool(bone.children) for bone in bones}
         subframes = frameRange % 1
         roundedFrames = frameRange.astype(int)
-        # side note: when blender alters bone matrices, the references don't change, only values
-        # this means we can store matrix_basis now and access it directly later to get new values
-        # rather than using bone.matrix_basis then (which is slower)
-        localScales = {} # for segment scale compensate calculations
+        scales = {} # for segment scale compensate calculations
         prevRots: dict[bpy.types.PoseBone, Euler] = {} # for euler compatibility
         lastNewFrame: dict[bpy.types.PoseBone, int] = {}
         mtcs: dict[bpy.types.PoseBone, tuple[Matrix, Matrix]] = {b: (None, None) for b in bones}
@@ -916,7 +917,7 @@ class BRRESChrExporter(BRRESAnimExporter[chr0.CHR0]):
                         frameVals[lastNewFrameIdx:kfIdx] = frameVals[lastNewFrameIdx]
                     except KeyError:
                         pass
-                    frameVals[kfIdx] = parentExporter.getLocalSRT(bone, localScales, mtcs, prevRots)
+                    frameVals[kfIdx] = parentResExporter.getLocalSRT(bone, scales, mtcs, prevRots)
                     lastNewFrame[bone] = kfIdx
         for bone, lastNewFrameIdx in lastNewFrame.items():
             frameVals = jointFrames[bone]
@@ -986,9 +987,9 @@ class BRRESClrExporter(BRRESAnimExporter[clr0.CLR0]):
             "brres.colorRegs.constant4"
         )
 
-    def __init__(self, parentExporter: "BRRESExporter", track: bpy.types.NlaTrack):
-        super().__init__(parentExporter, track)
-        frameStart = parentExporter.settings.frameStart
+    def __init__(self, parentResExporter: "BRRESExporter", track: bpy.types.NlaTrack):
+        super().__init__(parentResExporter, track)
+        frameStart = parentResExporter.settings.frameStart
         strip = track.strips[0]
         action = strip.action
         matAnim = clr0.MatAnim(strip.id_data.name)
@@ -1038,9 +1039,9 @@ class BRRESPatExporter(BRRESAnimExporter[pat0.PAT0]):
         """Mapping from every Blender path for PAT0 animations to the path's texture index."""
         return {f"brres.textures.coll_[{i}].activeImgSlot": i for i in range(gx.MAX_TEXTURES)}
 
-    def __init__(self, parentExporter: "BRRESExporter", track: bpy.types.NlaTrack):
-        super().__init__(parentExporter, track)
-        frameStart = parentExporter.settings.frameStart
+    def __init__(self, parentResExporter: "BRRESExporter", track: bpy.types.NlaTrack):
+        super().__init__(parentResExporter, track)
+        frameStart = parentResExporter.settings.frameStart
         strip = track.strips[0]
         action = strip.action
         mat: bpy.types.Material = strip.id_data
@@ -1058,9 +1059,9 @@ class BRRESPatExporter(BRRESAnimExporter[pat0.PAT0]):
             matAnim.texAnims[texIdx] = texAnim
             texImgs = mat.brres.textures[texIdx].imgs
             for texImg in texImgs:
-                if texImg.img not in parentExporter.images and parentExporter.onlyUsedImg:
-                    self.parentExporter.exportImg(texImg.img)
-                texAnim.texNames.append(parentExporter.imgName(texImg.img))
+                if texImg.img not in parentResExporter.images and parentResExporter.onlyUsedImg:
+                    self.parentResExporter.exportImg(texImg.img)
+                texAnim.texNames.append(parentResExporter.imgName(texImg.img))
             # fill out animation data by evaluating curve
             frameIdcs = []
             frameVals = []
@@ -1110,9 +1111,9 @@ class BRRESSrtExporter(BRRESAnimExporter[srt0.SRT0]):
                     pathInfo[fullPath] = (texAnimColl, i, prop)
         return pathInfo
 
-    def __init__(self, parentExporter: "BRRESExporter", track: bpy.types.NlaTrack):
-        super().__init__(parentExporter, track)
-        frameStart = parentExporter.settings.frameStart
+    def __init__(self, parentResExporter: "BRRESExporter", track: bpy.types.NlaTrack):
+        super().__init__(parentResExporter, track)
+        frameStart = parentResExporter.settings.frameStart
         strip = track.strips[0]
         action = strip.action
         matAnim = srt0.MatAnim(strip.id_data.name)
@@ -1160,9 +1161,9 @@ class BRRESVisExporter(BRRESAnimExporter[vis0.VIS0]):
 
     ANIM_TYPE = vis0.VIS0
 
-    def __init__(self, parentExporter: "BRRESExporter", track: bpy.types.NlaTrack):
-        super().__init__(parentExporter, track)
-        frameStart = parentExporter.settings.frameStart
+    def __init__(self, parentResExporter: "BRRESExporter", track: bpy.types.NlaTrack):
+        super().__init__(parentResExporter, track)
+        frameStart = parentResExporter.settings.frameStart
         strip = track.strips[0]
         action = strip.action
         rig: bpy.types.Object | bpy.types.Armature = track.id_data
