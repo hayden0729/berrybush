@@ -354,21 +354,21 @@ class MeshExporter():
 
 class BRRESMdlExporter():
 
-    def __init__(self, parentResExporter: "BRRESExporter", rigObj: bpy.types.Object):
+    def __init__(self, parentResExporter: "BRRESExporter", armObj: bpy.types.Object):
         settings = parentResExporter.settings
         self.parentResExporter = parentResExporter
-        self.model = mdl0.MDL0(rigObj.name)
-        self.rigObj = rigObj
+        self.model = mdl0.MDL0(armObj.name)
+        self.armObj = armObj
         self.parentResExporter.res.folder(mdl0.MDL0).append(self.model)
         # generate joints
-        rig: bpy.types.Armature = rigObj.data
-        restorePosePosition = rig.pose_position
+        arm: bpy.types.Armature = armObj.data
+        restorePosePosition = arm.pose_position
         if not settings.useCurrentPose:
-            rig.pose_position = 'REST' # temporarily put rig in rest position (pose restored at end)
+            arm.pose_position = 'REST' # temporarily put rig in rest position (pose restored at end)
             parentResExporter.depsgraph.update()
-        self._hasExtraRoot = settings.forceRootBones and len(rig.bones) > 0
+        self._hasExtraRoot = settings.forceRootBones and len(arm.bones) > 0
         self.joints: dict[str, mdl0.Joint] = {}
-        self._exportJoints(rigObj)
+        self._exportJoints(armObj)
         # generate meshes & everything they use
         self._mats: dict[str, mdl0.Material] = {}
         self.tevConfigs: dict[str, mdl0.TEVConfig] = {}
@@ -379,7 +379,7 @@ class BRRESMdlExporter():
             if settings.applyModifiers:
                 obj: bpy.types.Object = obj.evaluated_get(parentResExporter.depsgraph)
             parent = obj.parent
-            if parent is None or parent.type != 'ARMATURE' or parent.data.name != rig.name:
+            if parent is None or parent.type != 'ARMATURE' or parent.data.name != arm.name:
                 continue
             self.exportMeshObj(obj)
         # remove unused joints if enabled
@@ -388,7 +388,7 @@ class BRRESMdlExporter():
         # sort materials so arbitrary draw order (when group & prio are equal) is based on name
         self.model.mats.sort(key=lambda mat: mat.name)
         # restore current rig pose in case we changed it to ignore it
-        rig.pose_position = restorePosePosition
+        arm.pose_position = restorePosePosition
 
     def _genTEVStage(self, stageSettings: TevStageSettings):
         """Generate a MDL0 TEV stage from Blender settings."""
@@ -628,7 +628,7 @@ class BRRESMdlExporter():
                     if dataPath.endswith(boneVisSuffix):
                         try:
                             # cut off ".hide" to get bone
-                            bone = self.rigObj.path_resolve(dataPath[:-boneVisSuffixLen])
+                            bone = self.armObj.path_resolve(dataPath[:-boneVisSuffixLen])
                             if not isinstance(bone, bpy.types.Bone):
                                 continue
                         except ValueError:
@@ -719,13 +719,13 @@ class BRRESMdlExporter():
     def exportAttrGroup(self, group: mdl0.VertexAttrGroup):
         self.model.vertGroups[type(group)].append(group)
 
-    def _exportJoints(self, rigObj: bpy.types.Object):
+    def _exportJoints(self, armObj: bpy.types.Object):
         parentResExporter = self.parentResExporter
-        mtcs = {bone: bone.matrix for bone in rigObj.pose.bones}
+        mtcs = {bone: bone.matrix for bone in armObj.pose.bones}
         mtcs = {bone: (mtx, mtx.inverted()) for bone, mtx in mtcs.items()}
         localScales = {} # for segment scale compensate calculations
         prevRots = {} # for euler compatibility
-        for poseBone in rigObj.pose.bones:
+        for poseBone in armObj.pose.bones:
             bone = poseBone.bone
             joint = mdl0.Joint(self.joints[bone.parent.name] if bone.parent else None, bone.name)
             self.joints[joint.name] = joint
@@ -751,7 +751,7 @@ class BRRESMdlExporter():
             srt[np.isclose(srt, 0, atol=0.001)] = 0
             joint.setSRT(*srt)
         for boneName, joint in self.joints.items():
-            boneSettings = rigObj.data.bones[boneName].brres
+            boneSettings = armObj.data.bones[boneName].brres
             joint.bbMode = mdl0.BillboardMode[boneSettings.bbMode]
             try:
                 joint.bbParent = self.joints[boneSettings.bbParent]
@@ -767,8 +767,8 @@ class BRRESMdlExporter():
         if self._hasExtraRoot:
             return self.model.rootJoint
         self._hasExtraRoot = True
-        usedBoneNames = {b.name for b in self.rigObj.data.bones}
-        extraRoot = mdl0.Joint(name=makeUniqueName(self.rigObj.data.name, usedBoneNames))
+        usedBoneNames = {b.name for b in self.armObj.data.bones}
+        extraRoot = mdl0.Joint(name=makeUniqueName(self.armObj.data.name, usedBoneNames))
         if self.model.rootJoint is not None:
             self.model.rootJoint.parent = extraRoot
         self.model.rootJoint = extraRoot
@@ -787,19 +787,19 @@ class BRRESMdlExporter():
     def hasBoneParent(self, obj: bpy.types.Object):
         """True if an object is a child of a bone in this exporter's armature."""
         return (
-            obj.parent.original is self.rigObj
+            obj.parent.original is self.armObj
             and obj.parent_type == 'BONE'
             and obj.parent_bone in self.joints
         )
 
     def hasSkinning(self, obj: bpy.types.Object):
         """True if an object uses this exporter's armature for deformation. (Not just parenting)"""
-        if obj.parent.original is not self.rigObj or obj.parent_type == 'BONE':
+        if obj.parent.original is not self.armObj or obj.parent_type == 'BONE':
             return False
         if obj.parent_type == 'ARMATURE':
             return True
         for m in obj.modifiers:
-            if m.type == 'ARMATURE' and m.object is not None and m.object.original is self.rigObj:
+            if m.type == 'ARMATURE' and m.object is not None and m.object.original is self.armObj:
                 return True
         return False
 
@@ -850,7 +850,7 @@ class BRRESChrExporter(BRRESAnimExporter[chr0.CHR0]):
         strip = track.strips[0]
         action = strip.action
         frameStart, frameEnd = action.frame_range
-        rigObj: bpy.types.Object = track.id_data
+        armObj: bpy.types.Object = track.id_data
         frameRestore = scene.frame_current
         animDataRestore: dict[bpy.types.Object, tuple[bpy.types.Action, bool, bool]] = {}
         hideRestore = {obj: obj.hide_get() for obj in bpy.data.objects}
@@ -885,7 +885,7 @@ class BRRESChrExporter(BRRESAnimExporter[chr0.CHR0]):
         frameRange = np.linspace(frameStart, frameEnd, numFrames)
         emptyKfs = np.zeros((numFrames, 3))
         emptyKfs[:, 0] = frameRange - settings.frameStart
-        bones = rigObj.pose.bones
+        bones = armObj.pose.bones
         jointFrames = {bone: np.empty((numFrames, 3, 3)) for bone in bones}
         hasChild = {bone: bool(bone.children) for bone in bones}
         subframes = frameRange % 1
@@ -1166,7 +1166,7 @@ class BRRESVisExporter(BRRESAnimExporter[vis0.VIS0]):
         frameStart = parentResExporter.settings.frameStart
         strip = track.strips[0]
         action = strip.action
-        rig: bpy.types.Object | bpy.types.Armature = track.id_data
+        arm: bpy.types.Object | bpy.types.Armature = track.id_data
         boneVisSuffix = ".hide"
         boneVisSuffixLen = len(boneVisSuffix)
         jointAnims: list[vis0.JointAnim] = []
@@ -1176,7 +1176,7 @@ class BRRESVisExporter(BRRESAnimExporter[vis0.VIS0]):
                 continue
             try:
                 # cut off ".hide" to get bone
-                bone: bpy.types.Bone = rig.path_resolve(dataPath[:-boneVisSuffixLen])
+                bone: bpy.types.Bone = arm.path_resolve(dataPath[:-boneVisSuffixLen])
                 if not isinstance(bone, bpy.types.Bone):
                     continue
             except ValueError:
@@ -1270,6 +1270,10 @@ class BRRESExporter():
             self.res.files.pop(mdl0.MDL0, None)
 
     def merge(self, baseRes: brres.BRRES):
+        """Replace this exporter's BRRES with a new "base", and merge the original subfiles into it.
+
+        In case of naming conflicts, subfiles in the base BRRES will be overwritten.
+        """
         for fType, folder in self.res.files.items():
             # get files from base folder & new folder and overwrite those w/ same names
             baseFolder = baseRes.folder(fType)
@@ -1279,7 +1283,12 @@ class BRRESExporter():
         self.res = baseRes
 
     @classmethod
-    def export(cls, context: bpy.types.Context, settings: "ExportBRRES", baseData = b""):
+    def export(cls, context: bpy.types.Context, settings: "ExportBRRES", baseData = b"") -> bytes:
+        """Export a BRRES based on a Blender context & settings.
+        
+        Data for a "base BRRES" can be provided for merging (though this is only used if enabled in
+        the settings).
+        """
         exporter = cls(settings)
         exporter.update(context)
         # optionally merge with existing file
@@ -1293,10 +1302,12 @@ class BRRESExporter():
             packed = binaryutils.pad(packed, settings.padSize * int(settings.padUnit))
         return packed
 
-    def _exportModel(self, rigObj: bpy.types.Object):
-        self.models[rigObj] = BRRESMdlExporter(self, rigObj)
+    def _exportModel(self, armObj: bpy.types.Object):
+        """Export a MDL0 based on a Blender armature object and add it to this BRRES."""
+        self.models[armObj] = BRRESMdlExporter(self, armObj)
 
     def exportImg(self, bImg: bpy.types.Image):
+        """Export a TEX0 based on a Blender image and add it to this BRRES."""
         img = tex0.TEX0(bImg.name)
         self.images[bImg] = img
         self.res.folder(tex0.TEX0).append(img)
@@ -1323,6 +1334,10 @@ class BRRESExporter():
                 return None
 
     def _exportAnim(self, t: type[BRRESAnimExporter], track: bpy.types.NlaTrack):
+        """Attempt to export an animation based on a Blender NLA track and add it to this BRRES.
+
+        (Note that if animation data turns out to be empty, the animation is discarded)
+        """
         t(self, track)
 
     def testAnimTrack(self, track: bpy.types.NlaTrack, usedNames: set[str]):
