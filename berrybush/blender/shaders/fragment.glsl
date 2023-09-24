@@ -62,7 +62,8 @@ vec4 getRasColor(GLSLTevStage stage) {
 vec2 getTexCoord(GLSLTexture tex) {
     // get the coordinate to sample for a texture
     vec3 coord = vec3(0.0);
-    switch (tex.mapMode) {
+    int mapMode = tex.mapMode;
+    switch (mapMode) {
         case 0: // uvs
         case 1:
         case 2:
@@ -121,7 +122,8 @@ vec4 sampleStageTexture(GLSLTevStage stage) {
                 // apply indirect texturing, as long as a valid indirect texture is selected
                 GLSLIndTex ind = material.inds[stage.ind.texIdx];
                 if (ind.texIdx < material.numTextures) {
-                    switch (ind.mode) {
+                    int mode = ind.mode;
+                    switch (mode) {
                         case 0: // warp
                             vec2 indTexCoord = getTexCoord(material.textures[ind.texIdx]) / ind.coordScale;
                             vec3 indColor = sampleTexture(ind.texIdx, indTexCoord).abg * 255 + stage.ind.bias;
@@ -199,7 +201,8 @@ vec4 getTevOutput() {
                     // compare combined color bits
                     vec2 compArgs;
                     for (int i = 0; i < 2; i++) {
-                        switch (params.compChan) {
+                        int compChan = params.compChan;
+                        switch (compChan) {
                             case 0: compArgs[i] = colorArgs[i].r; break;
                             case 1: compArgs[i] = colorArgs[i].r + colorArgs[i].g * 255; break;
                             case 2: compArgs[i] = colorArgs[i].r + colorArgs[i].g * 255 + colorArgs[i].b * 255 * 255; break;
@@ -251,7 +254,8 @@ bool alphaTest(float val) {
     // perform the alpha test for some alpha value (if false, should be discarded)
     bvec2 alphaTestsPassed = bvec2(false, false);
     for (int i = 0; i < 2; i++) {
-        switch (material.alphaTestComps[i]) {
+        int compMode = material.alphaTestComps[i];
+        switch (compMode) {
             case 0: alphaTestsPassed[i] = false; break;
             case 1: alphaTestsPassed[i] = (val < material.alphaTestVals[i]); break;
             case 2: alphaTestsPassed[i] = (val == material.alphaTestVals[i]); break;
@@ -262,7 +266,8 @@ bool alphaTest(float val) {
             case 7: alphaTestsPassed[i] = true; break;
         }
     }
-    switch (material.alphaTestLogic) {
+    int logicMode = material.alphaTestLogic;
+    switch (logicMode) {
         case 0: return (alphaTestsPassed[0] && alphaTestsPassed[1]);
         case 1: return (alphaTestsPassed[0] || alphaTestsPassed[1]);
         case 2: return (alphaTestsPassed[0] ^^ alphaTestsPassed[1]);
