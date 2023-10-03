@@ -23,20 +23,30 @@ class DictSerializer(Serializer[S_PARENT_T, dict[str, _S_ENTRY_T]]):
 class DictReader(DictSerializer[_R_STR_T, int], Reader, StrPoolReadMixin):
     """Reader for an ordered map with string keys stored in a BRRES file."""
 
+    def __init__(self, parent: S_PARENT_T = None, offset = 0):
+        super().__init__(parent, offset)
+        self._duplicateName = ""
+        """If any entry names are duplicated, one is stored here to be used for an error message."""
+
     def unpack(self, data: bytes):
         super().unpack(data)
         offset = self._offset
         self._data = {}
+        self._duplicateName = ""
         unpackedHeader = self._HEAD_STRCT.unpack_from(data, offset)
         numEntries = unpackedHeader[1]
         entrySize = EntryStruct.size()
         firstEntryOffset = offset + self._HEAD_STRCT.size + entrySize
         lastEntryOffset = firstEntryOffset + entrySize * numEntries
+        # parse entry names & add offsets to dict, keeping track of duplicate names if any
         for entryOffset in range(firstEntryOffset, lastEntryOffset, entrySize):
             entry = EntryStruct().unpack(data[entryOffset:])
             nameOffset = offset + entry.nameOffset
             dataOffset = offset + entry.dataOffset
-            self._data[self.readString(data, nameOffset)] = dataOffset
+            name = self.readString(data, nameOffset)
+            if name in self._data:
+                self._duplicateName = name
+            self._data[name] = dataOffset
         return self
 
     def readEntries(self, data: bytes, entryType: type[_R_ENTRY_T]):
@@ -46,6 +56,10 @@ class DictReader(DictSerializer[_R_STR_T, int], Reader, StrPoolReadMixin):
         set to the parent of this dict. If any of this dict's entries point to the same offset,
         they'll be given the same reader object. 
         """
+        if self._duplicateName:
+            raise ValueError(f"Cannot unpack BRRES collection of type '{entryType.__name__}' "
+                             f"containing multiple entries with the same name "
+                             f"('{self._duplicateName}')")
         unpackedByOffset: dict[int, _R_ENTRY_T] = {}
         unpackedByKey: dict[str, _R_ENTRY_T] = {}
         for key, offset in self._data.items():
