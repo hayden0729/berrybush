@@ -999,7 +999,7 @@ class BRRESRenderEngine(bpy.types.RenderEngine):
         """Compile & return the post-processing shader."""
         shaderInfo = gpu.types.GPUShaderCreateInfo()
         shaderInfo.sampler(0, 'FLOAT_2D', "tex")
-        shaderInfo.push_constant('BOOL', "translucent")
+        shaderInfo.push_constant('BOOL', "doAlpha")
         shaderInfo.vertex_in(0, 'VEC2', "position")
         interfaceInfo = gpu.types.GPUStageInterfaceInfo("shader_interface")
         interfaceInfo.smooth('VEC2', "fragPosition")
@@ -1007,9 +1007,9 @@ class BRRESRenderEngine(bpy.types.RenderEngine):
         shaderInfo.fragment_out(0, 'VEC4', "fragOutput")
         vertSrc = "gl_Position = vec4(position, 1, 1); fragPosition = position;"
         shaderInfo.vertex_source(f"void main() {{{vertSrc}}}")
-        translucentOutput = "pow(texture(tex, fragPosition / 2 + .5), vec4(2.2, 2.2, 2.2, 1.0))"
+        alphaOutput = "pow(texture(tex, fragPosition / 2 + .5), vec4(2.2, 2.2, 2.2, 1.0))"
         opaqueOutput = "vec4(pow(texture(tex, fragPosition / 2 + .5).rgb, vec3(2.2)), 1.0)"
-        fragSrc = f"fragOutput = (translucent) ? {translucentOutput} : {opaqueOutput};"
+        fragSrc = f"fragOutput = (doAlpha) ? {alphaOutput} : {opaqueOutput};"
         shaderInfo.fragment_source(f"void main() {{{fragSrc}}}")
         return gpu.shader.create_from_info(shaderInfo)
 
@@ -1076,7 +1076,7 @@ class BRRESRenderEngine(bpy.types.RenderEngine):
         except AttributeError:
             pass
 
-    def drawScene(self, projectionMtx: Matrix, viewMtx: Matrix, translucent = False):
+    def drawScene(self, projectionMtx: Matrix, viewMtx: Matrix, doAlpha = False):
         # get active framebuffer for re-bind to fix the problem described in _updateDims,
         # since it also gets triggered when the offscreen is bound immediately after creation
         # (seemingly not necessary after first frame, but i'm doing it every time anyway to be safe)
@@ -1093,7 +1093,7 @@ class BRRESRenderEngine(bpy.types.RenderEngine):
         bgl.glActiveTexture(bgl.GL_TEXTURE0)
         bgl.glBindTexture(bgl.GL_TEXTURE_2D, self.offscreen.color_texture)
         self.shader.bind()
-        self.shader.uniform_bool("translucent", [translucent])
+        self.shader.uniform_bool("doAlpha", [doAlpha])
         self.batch.draw(self.shader)
 
     def drawPreview(self, projectionMtx: Matrix, viewMtx: Matrix):
@@ -1106,7 +1106,7 @@ class BRRESRenderEngine(bpy.types.RenderEngine):
         # pass 2: post-processing
         self.shader.bind()
         self.shader.uniform_sampler("tex", self.offscreen.texture_color)
-        self.shader.uniform_bool("translucent", [True])
+        self.shader.uniform_bool("doAlpha", [True])
         self.batch.draw(self.shader)
 
     def render(self, depsgraph: bpy.types.Depsgraph):
@@ -1130,7 +1130,7 @@ class BRRESRenderEngine(bpy.types.RenderEngine):
             if self.is_preview:
                 self.drawPreview(projectionMtx, viewMtx)
             else:
-                self.drawScene(projectionMtx, viewMtx, translucent=render.film_transparent)
+                self.drawScene(projectionMtx, viewMtx, doAlpha=render.film_transparent)
             b = gpu.types.Buffer('FLOAT', (dims[0] * dims[1], 4))
             fb.read_color(0, 0, *dims, 4, 0, 'FLOAT', data=b)
             result.layers[0].passes["Combined"].rect.foreach_set(b)
