@@ -1041,7 +1041,8 @@ class BRRESRenderEngine(bpy.types.RenderEngine):
             # preview stuff disabled as it's bugged for now and idk the fix; see
             # https://blender.stackexchange.com/questions/285693/custom-render-engine-creating-material-previews-with-opengl
             "MATERIAL_PT_preview",
-            "EEVEE_MATERIAL_PT_context_material"
+            "EEVEE_MATERIAL_PT_context_material",
+            "RENDER_PT_opengl_film"
         }
         excluded = {
             "EEVEE_MATERIAL_PT_viewport_settings"
@@ -1129,7 +1130,7 @@ class BRRESRenderEngine(bpy.types.RenderEngine):
             if self.is_preview:
                 self.drawPreview(projectionMtx, viewMtx)
             else:
-                self.drawScene(projectionMtx, viewMtx, translucent=True)
+                self.drawScene(projectionMtx, viewMtx, translucent=render.film_transparent)
             b = gpu.types.Buffer('FLOAT', (dims[0] * dims[1], 4))
             fb.read_color(0, 0, *dims, 4, 0, 'FLOAT', data=b)
             result.layers[0].passes["Combined"].rect.foreach_set(b)
