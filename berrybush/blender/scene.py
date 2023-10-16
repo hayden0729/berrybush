@@ -6,6 +6,11 @@ from .tev import TevSettings
 
 class SceneSettings(bpy.types.PropertyGroup):
     tevConfigs: TevSettings.CustomIDCollectionProperty()
+    renderIgnoreBG: bpy.props.BoolProperty(
+        name="Ignore Background",
+        description="For drawing operations that reference existing framebuffer colors (e.g., blending), use the source color instead when nothing has been written yet. Only affects transparent renders (not viewport)", # pylint: disable=line-too-long
+        default=True
+    )
     # version default of (0, 0, 0) just behaves as "most recent" & gets updated on blendfile save
     # this is done because we want the default to be the most recent version, but can't do that
     # directly because:
