@@ -112,6 +112,7 @@ classes = (
     brresexport.ArmGeoPanel,
     brresexport.ImagePanel,
     brresexport.AnimPanel,
+    render.FilmPanel,
     # operators
     proputils.CustomIDCollOpAdd,
     proputils.CustomIDCollOpRemove,

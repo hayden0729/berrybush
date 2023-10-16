@@ -9,7 +9,8 @@ from mathutils import Matrix
 import numpy as np
 # internal imports
 from .common import ( # pylint: disable=unused-import
-    LOG_PATH, enumVal, foreachGet, getLoopVertIdcs, getLoopFaceIdcs, getFaceMatIdcs, getLayerData
+    LOG_PATH, PropertyPanel,
+    enumVal, foreachGet, getLoopVertIdcs, getLoopFaceIdcs, getFaceMatIdcs, getLayerData
 )
 from .brresexport import IMG_FMTS, padImgData
 from .glslstruct import GLSLBool, GLSLInt, GLSLFloat, GLSLVec, GLSLArr, GLSLMat, GLSLStruct
@@ -1033,16 +1034,15 @@ class BRRESRenderEngine(bpy.types.RenderEngine):
         return np.array(bpy.context.scene.world.color[:3]) ** .4545
 
     @classmethod
-    def getSupportedPanels(cls):
-        """Get the panels supported by this render engine."""
+    def getSupportedBlenderPanels(cls):
+        """Get the standard Blender panels supported by this render engine."""
         panels: set[type[bpy.types.Panel]] = set()
         # support panels w/ BLENDER_RENDER, plus anything in additional & minus anything in excluded
         additional = {
             # preview stuff disabled as it's bugged for now and idk the fix; see
             # https://blender.stackexchange.com/questions/285693/custom-render-engine-creating-material-previews-with-opengl
             "MATERIAL_PT_preview",
-            "EEVEE_MATERIAL_PT_context_material",
-            "RENDER_PT_opengl_film"
+            "EEVEE_MATERIAL_PT_context_material"
         }
         excluded = {
             "EEVEE_MATERIAL_PT_viewport_settings"
@@ -1056,14 +1056,14 @@ class BRRESRenderEngine(bpy.types.RenderEngine):
 
     @classmethod
     def registerOnPanels(cls):
-        """Add this render engine to all panels it supports."""
-        for p in cls.getSupportedPanels():
+        """Add this render engine to all standard Blender panels it supports."""
+        for p in cls.getSupportedBlenderPanels():
             p.COMPAT_ENGINES.add(cls.bl_idname)
 
     @classmethod
     def unregisterOnPanels(cls):
-        """Remove this render engine from all panels it supports."""
-        for p in cls.getSupportedPanels():
+        """Remove this render engine from all standard Blender panels it supports."""
+        for p in cls.getSupportedBlenderPanels():
             try:
                 p.COMPAT_ENGINES.remove(cls.bl_idname)
             except KeyError:
@@ -1160,3 +1160,22 @@ class BRRESRenderEngine(bpy.types.RenderEngine):
 
     def view_draw(self, context, depsgraph):
         self.drawScene(context.region_data.window_matrix, context.region_data.view_matrix)
+
+
+class FilmPanel(PropertyPanel):
+    bl_idname = "RENDER_PT_brres_film"
+    bl_label = "Film"
+    bl_context = "render"
+    COMPAT_ENGINES = {'BERRYBUSH'}
+
+    def draw(self, context: bpy.types.Context):
+        layout = self.layout
+        layout.use_property_split = True
+        layout.use_property_decorate = False
+        scene = context.scene
+        render = scene.render
+        layout.prop(render, "film_transparent")
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context):
+        return context.engine in cls.COMPAT_ENGINES
