@@ -1501,7 +1501,7 @@ class ExportBRRES(bpy.types.Operator, ExportHelper):
 
     removeUnusedBones: bpy.props.BoolProperty(
         name="Remove Unused Bones",
-        description="Only export bones used for deforming and visibility (and their ancestors). Other bones are still taken into account for constraint & driver evaluation, but not exported.",  # pylint: disable=line-too-long
+        description="Only export bones used for deforming and visibility (and their ancestors). Other bones are still taken into account for constraint & driver evaluation, but not exported",  # pylint: disable=line-too-long
         default=False
     )
 
