@@ -233,11 +233,16 @@ class MeshExporter():
         geoInfo.simplifyData()
         # generate brres mesh for each material used
         maxAttrGroupLen = mdl0.VertexAttrGroup.MAX_LEN
-        for matSlot in usedMatSlots(obj, mesh):
+        usedSlots = usedMatSlots(obj, mesh)
+        for matSlot in obj.material_slots:
             blendMat = matSlot.material
             if not blendMat:
                 continue
+            # note that material is always exported, regardless of whether it's used for geometry
+            # (handy for working around game hardcodes that need materials to exist in certain ways)
             mat = parentMdlExporter.exportMaterial(blendMat)
+            if matSlot not in usedSlots:
+                continue
             curMatTriLoopIdcs = geoInfo.triLoopIdcs[geoInfo.triMatIdcs == matSlot.slot_index]
             for sliceIdx, triStart in enumerate(range(0, len(curMatTriLoopIdcs), maxAttrGroupLen)):
                 usedTriLoopIdcs = curMatTriLoopIdcs[triStart : triStart + maxAttrGroupLen]
