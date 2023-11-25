@@ -1447,7 +1447,7 @@ class MaterialWriter(MaterialSerializer["MDL0Writer"], Writer, StrPoolWriteMixin
 
     def _calcSize(self):
         size = self._preTexSize() + sum(writer.size() for writer in self.textures)
-        return pad(size, 32, self.offset) + self._CMD_STRCT.size
+        return pad(size, 32, self.offset - self.parentSer.offset) + self._CMD_STRCT.size
 
     def _getColorRegs(self):
         """Get this writer's material's standard/constant colors in their GX registers.
@@ -1569,7 +1569,7 @@ class MaterialWriter(MaterialSerializer["MDL0Writer"], Writer, StrPoolWriteMixin
         # pack header & return
         offset = self.offset
         texOffset = self._MAIN_STRCT.size + len(packedSRTs + packedMtcs + packedLCs)
-        cmdOffset = pad(texOffset + len(packedTexs), 32, offset)
+        cmdOffset = pad(texOffset + len(packedTexs), 32, offset - self.parentSer.offset)
         numTexs = len(self.textures)
         numStages = len(mat.tevConfig.stages) if mat.tevConfig is not None else 0
         mtxGen = self.parentSer.MTX_GEN_TYPES_2D.index(self._data.mtxGen)
@@ -1589,7 +1589,7 @@ class MaterialWriter(MaterialSerializer["MDL0Writer"], Writer, StrPoolWriteMixin
                                      tevCfgOffset - offset, numTexs, texOffset if numTexs else 0,
                                      0, 0, cmdOffset, self._texFlags(), mtxGen)
         mainBody = head + packedSRTs + packedMtcs + packedLCs + packedTexs
-        return pad(mainBody, 32, offset) + packedCmds
+        return pad(mainBody, 32, offset - self.parentSer.offset) + packedCmds
 
 
 @dataclass
