@@ -175,6 +175,10 @@ class BRRESWriter(BRRESSerializer, Writer, StrPoolWriteMixin):
         rootFldrOffset = folderOffset + self._ROOT_STRCT.size
         folderOffset = rootFldrOffset + rootFldrSize
         for folderType, folder in data.files.items():
+            if folderType is TEX0:
+                # the tex0 folder must be padded to 16, and always is in retail files
+                # (however, this IS a special case - other folders may start at in-between offsets)
+                fileOffset = pad(fileOffset, 16)
             writer = self._FILE_WRITERS[folderType]
             writers = {} # file writers for this folder
             for file in folder:
@@ -207,13 +211,18 @@ class BRRESWriter(BRRESSerializer, Writer, StrPoolWriteMixin):
         rootSize = self._ROOT_STRCT.size + len(packedRes)
         packedRoot = self._rootPad(self._ROOT_STRCT.pack(b"root", rootSize) + packedRes)
         # pack files
-        allFiles = tuple(f for folder in nest[1:] for f in folder.getInstance().values())
-        packedFiles = b"".join(f.pack() for f in allFiles)
+        packedFiles = b""
+        numFiles = 1 # starts at 1 bc the root is counted as a "file" for this count
+        for folder in nest[1:]:
+            files = folder.getInstance().values()
+            if files and isinstance(next(iter(files)), TEX0Writer):
+                packedFiles = pad(packedFiles, 16) # special tex0 pad detailed in fromInstance()
+            packedFiles += b"".join(file.pack() for file in files)
+            numFiles += len(files)
         # pack strings
         packedStrs = b"".join(self._packStr(string) for string in self._stringPool)
         # pack header
         rootOffset = self._HEAD_STRCT.size
         bom = b"\xfe\xff"
-        numFiles = len(allFiles) + 1 # add 1 bc ig the root is counted as a file
         packedHead = self._HEAD_STRCT.pack(self.MAGIC, bom, self._size, rootOffset, numFiles)
         return super().pack() + self._finalPad(packedHead + packedRoot + packedFiles + packedStrs)
