@@ -395,12 +395,12 @@ class DiscreteAnimSerializer(AnimSerializer):
     def _interpolated(self):
         """All interpolated frame values for this animation."""
         a = self._data
-        l = self.length if self.length is not None else a.keyframes[-1, 0]
+        l = max(self.length if self.length is not None else a.keyframes[-1, 0], 0)
         return a.interpolate(np.arange(l + 1))
 
     def size(self):
         a = self._data
-        l = self.length if self.length is not None else a.keyframes[-1, 0]
+        l = max(self.length if self.length is not None else a.keyframes[-1, 0], 0)
         return self._HEAD_STRCT.size + self._FRAME_TYPE.itemsize * int(round(l + 1))
 
     def fromInstance(self, data: Animation):
