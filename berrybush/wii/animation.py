@@ -50,7 +50,6 @@ def hermite(x1, y1, t1, x2, y2, t2, newx):
     return h1 * y1 + h2 * y2 + (h3 * t1 + h4 * t2) * span
 
 
-
 class Animation():
     """Animation with a set length, speed, and keyframe data."""
 
@@ -64,6 +63,7 @@ class Animation():
         (Up to the first defined frame, the animation just evaluates to that frame)
         """
         self.length = length
+        """Number of full frames in this animation (frame span including one endpoint, NOT both)."""
 
     def copy(self):
         """Create a copy of this animation with a new (but identical) keyframe array."""
@@ -372,9 +372,12 @@ class I12(InterpolatedAnimSerializer):
 
 class DiscreteAnimSerializer(AnimSerializer):
     """Format for storing animation data where a value is stored for every frame.
-    
+
+    Animations stored in this format must start at frame 0. Data before this frame will not be
+    exported.
+
     Note: BrawlBox & other sources call this "linear" because linear interpolation is used when
-    sampling between frames, but I call it "discrete" instead because IMO that's more descriptive
+    sampling between frames, but I call it "discrete" instead because IMHO that's more descriptive
     regarding how the data is actually stored.
     """
 
