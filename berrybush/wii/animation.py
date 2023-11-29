@@ -7,6 +7,7 @@ from typing import TypeVar
 import numpy as np
 # internal imports
 from .binaryutils import maxBitVal
+from .hermite import interpolateSpline, simplifySpline
 from .serialization import Reader, Writer
 from .subfile import Subfile
 
@@ -34,20 +35,6 @@ def calcAnimLen(frameScale: float):
 def calcFrameScale(animLen: float):
     """Calculate an animation's normalized frame scale from its length."""
     return calcAnimLen(animLen) # (...it's just the same calculation as calcAnimLen)
-
-
-def hermite(x1, y1, t1, x2, y2, t2, newx):
-    """Hermite interpolation for two points. Return the Y value for some X between them."""
-    # https://www.cubic.org/docs/hermite.htm
-    span = x2 - x1
-    fac = (newx - x1) / span
-    fac2 = fac ** 2
-    fac3 = fac ** 3
-    h1 = 2 * fac3 - 3 * fac2 + 1
-    h2 = -2 * fac3 + 3 * fac2
-    h3 = fac3 - 2 * fac2 + fac
-    h4 = fac3 - fac2
-    return h1 * y1 + h2 * y2 + (h3 * t1 + h4 * t2) * span
 
 
 class Animation():
@@ -97,19 +84,14 @@ class Animation():
         nxt = np.pad(kfs[1:], ((0, 1), (0, 0)), "edge")
         kfs[:, 2] = (nxt[:, 1] - prv[:, 1]) / (nxt[:, 0] - prv[:, 0])
 
+    def simplify(self, maxError: float):
+        """Simplify this animation's keyframes based on a max error allowed at each frame."""
+        if len(self.keyframes) > 1: # this condition isn't necessary, just a slight optimization
+            self.keyframes = simplifySpline(self.keyframes, maxError)
+
     def interpolate(self, frames: np.ndarray) -> np.ndarray:
         """Get interpolated values for this animation at the given positions."""
-        kfs = self.keyframes
-        interpolated = np.empty(frames.shape)
-        nextKfIdcs = np.searchsorted(kfs[:, 0], frames) # next kf index for each frame
-        outOfBoundsL = nextKfIdcs == 0
-        outOfBoundsR = nextKfIdcs == len(kfs)
-        inBounds = np.logical_not(np.logical_or(outOfBoundsL, outOfBoundsR))
-        interpolated[outOfBoundsL] = kfs[0, 1]
-        interpolated[outOfBoundsR] = kfs[-1, 1]
-        idcs = nextKfIdcs[inBounds]
-        interpolated[inBounds] = hermite(*kfs[idcs].T, *kfs[idcs - 1].T, frames[inBounds])
-        return interpolated
+        return interpolateSpline(self.keyframes, frames)[:, 1]
 
 
 class AnimSerializer(Reader[None, Animation], Writer[None, Animation]):
@@ -387,9 +369,9 @@ class DiscreteAnimSerializer(AnimSerializer):
     def __init__(self, length = None):
         super().__init__()
         self.length = length
-        """Total length of this animation. If None, temporarily calculated automatically on pack.
+        """Number of frames to read, or to write (starting at frame 0).
 
-        (Required to be provided for unpack, as it determines how many frames are read)
+        When packing, this can be set to None to use the last keyframe's frame index instead.
         """
 
     def _interpolated(self):

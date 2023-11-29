@@ -931,12 +931,11 @@ class BRRESChrExporter(BRRESAnimExporter[chr0.CHR0]):
         chrAnim = self.getAnim(track.name, action)
         usedJointNames = {jointAnim.jointName for jointAnim in chrAnim.jointAnims}
         jointAnims: dict[bpy.types.PoseBone, chr0.JointAnim] = {}
-        animFmts = [animation.I12, animation.D4, animation.I12] # formats for s, r, t respectively
         for bone, frameVals in jointFrames.items():
             if bone.name in usedJointNames:
                 continue # ignore bones already in chr0, in case it already existed from another rig
             jointAnims[bone] = jointAnim = chr0.JointAnim(bone.name)
-            jointAnim.animFmts[:] = animFmts
+            jointAnim.animFmts[:] = (animation.I12, animation.I12, animation.I12)
             if bone.bone.inherit_scale == 'NONE':
                 jointAnim.segScaleComp = True
                 try:
@@ -948,8 +947,8 @@ class BRRESChrExporter(BRRESAnimExporter[chr0.CHR0]):
             frameVals[np.isclose(frameVals, 0, atol=0.001)] = 0
             for anims, frames in zip(allAnims, frameVals.transpose((1, 2, 0))):
                 for anim, compVals in zip(anims, frames):
-                    # filter out frames w/ the same values as prev & next frames
                     anim.length = chrAnim.length
+                    # filter out frames w/ the same values as prev & next frames
                     eqNext = np.isclose(compVals[:-1], compVals[1:])
                     dupFrames = np.logical_and(eqNext[:-1], eqNext[1:])
                     # note: last frame is filtered out if it equals prev, but first is always needed
@@ -957,6 +956,16 @@ class BRRESChrExporter(BRRESAnimExporter[chr0.CHR0]):
                     keyframes = emptyKfs[frameFltr].copy()
                     keyframes[:, 1] = compVals[frameFltr]
                     anim.keyframes = keyframes
+                    # then, further simplify lossily if enabled
+                    if settings.doAnimSimplify:
+                        anim.setSmooth()
+                        anim.simplify(settings.animMaxError)
+            # determine whether discrete format is worth it (would save space) for rotation
+            # (only test for rotation as it's not supported for scale or translation)
+            rotLength = sum(max(a.keyframes[-1, 0], 0) + 1 for a in jointAnim.rot)
+            rotFrames = sum(len(a.keyframes) for a in jointAnim.rot)
+            if rotFrames * 12 > rotLength * 4: # rotFrames is # frames for i12, rotLength is for d4
+                jointAnim.animFmts[1] = animation.D4
         # restore stuff we had to change for baking
         for obj, restore in animDataRestore.items():
             animData = obj.animation_data
@@ -1119,7 +1128,8 @@ class BRRESSrtExporter(BRRESAnimExporter[srt0.SRT0]):
 
     def __init__(self, parentResExporter: "BRRESExporter", track: bpy.types.NlaTrack):
         super().__init__(parentResExporter, track)
-        frameStart = parentResExporter.settings.frameStart
+        settings = parentResExporter.settings
+        frameStart = settings.frameStart
         strip = track.strips[0]
         action = strip.action
         matAnim = srt0.MatAnim(strip.id_data.name)
@@ -1142,8 +1152,7 @@ class BRRESSrtExporter(BRRESAnimExporter[srt0.SRT0]):
                 texAnimColl[texIdx] = texAnim
             compAnim: animation.Animation = getattr(texAnim, texProp)[fcurve.array_index]
             # fill out animation data by evaluating curve
-            # this is a bit crude - in the future maybe we can make things more robust to compress
-            # the output data more, but this works fine for now
+            # maybe this should be proper exact conversion to hermite someday?
             frameIdcs = []
             frameVals = []
             minFrame, maxFrame = fcurve.range()
@@ -1154,8 +1163,13 @@ class BRRESSrtExporter(BRRESAnimExporter[srt0.SRT0]):
             if texProp == "rot":
                 frameVals = np.rad2deg(frameVals)
             compAnim.keyframes = np.array([frameIdcs, frameVals, [0] * len(frameIdcs)]).T
+            # if all keyframes are same, reduce to 1
             if len(set(frameVals)) == 1:
-                compAnim.keyframes = compAnim.keyframes[:1] # all keyframes are same, so reduce to 1
+                compAnim.keyframes = compAnim.keyframes[:1]
+            # then, further simplify lossily if enabled
+            if settings.doAnimSimplify:
+                compAnim.setSmooth()
+                compAnim.simplify(settings.animMaxError)
         # if mat anim is non-empty (relevant fcurves were found), update srt anim
         if matAnim.texAnims or matAnim.indAnims:
             srtAnim = self.getAnim(track.name, action)
@@ -1587,6 +1601,18 @@ class ExportBRRES(bpy.types.Operator, ExportHelper):
         default=True
     )
 
+    doAnimSimplify: bpy.props.BoolProperty(
+        name="Simplify",
+        description="Lossily compress CHR & SRT animations by simplifying baked animation data",
+        default=False
+    )
+
+    animMaxError: bpy.props.FloatProperty(
+        name="Simplify",
+        description="How much the exported animation is allowed to deviate from the original at any given frame", # pylint: disable=line-too-long
+        default=.01
+    )
+
     frameStart: bpy.props.IntProperty(
         name="Frame Start",
         description="First frame of animation",
@@ -1738,4 +1764,5 @@ class AnimPanel(ExportPanel):
         layout.prop(settings, "includeArmAnims")
         layout.prop(settings, "includeMatAnims")
         layout.prop(settings, "includeMutedAnims")
+        drawCheckedProp(layout, settings, "doAnimSimplify", settings, "animMaxError")
         layout.prop(settings, "frameStart")
