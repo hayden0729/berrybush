@@ -286,8 +286,9 @@ class PAT0Reader(PAT0Serializer, SubfileReader):
         # read texture/palette names used by this pat0
         allNames = (self.texNames, self.pltNames)
         for offset, names, count in zip(unpackedHeader[1:3], allNames, unpackedHeader[10:12]):
-            nameOffsets = Struct(">" + "i" * count).unpack_from(data, self.offset + offset)
-            names[:] = [self.readString(data, self.offset + offset + o) for o in nameOffsets]
+            absOffset = self.offset + offset
+            nameOffsets = Struct(">" + "i" * count).unpack_from(data, absOffset)
+            names[:] = [self.readString(data, absOffset + o) if o else None for o in nameOffsets]
         return self
 
     def _updateInstance(self):
@@ -306,7 +307,10 @@ class PAT0Writer(PAT0Serializer, SubfileWriter):
         self.pltNames: dict[str, int] = {}
 
     def getStrings(self):
-        return self._matAnims.getStrings() | set(self.texNames) | set(self.pltNames)
+        names = set(self.texNames) | set(self.pltNames)
+        # None may be used among names to indicate that a texture or palette has a null offset
+        names.discard(None)
+        return self._matAnims.getStrings() | names
 
     def fromInstance(self, data: PAT0):
         super().fromInstance(data)
@@ -350,8 +354,12 @@ class PAT0Writer(PAT0Serializer, SubfileWriter):
         nameOffsets: list[int] = []
         curOffset = headSize + len(packedData)
         for names in (self.texNames, self.pltNames):
-            st = Struct(">" + "i" * len(names))
-            packedNames = st.pack(*(self.stringOffset(t) - curOffset - self.offset for t in names))
+            packedNames = b""
+            for name in names:
+                offset = self.stringOffset(name)
+                if offset:
+                    offset -= (self.offset + curOffset)
+                packedNames += int(offset).to_bytes(4, "big")
             nameOffsets.append(curOffset)
             packedNameLists.append(packedNames)
             curOffset += len(packedNames)

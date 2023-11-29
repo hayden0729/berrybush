@@ -1093,9 +1093,9 @@ class BRRESPatImporter(BRRESAnimImporter[pat0.PAT0]):
                     fPltName = pltNames[p] if p < numPlt else None
                     fImgInfo = (fTexName, fPltName)
                     if fImgInfo not in texImgs:
-                        frameImg = bpy.data.images[parentImporter.images[fImgInfo]]
+                        frameImgName = parentImporter.images.get(fImgInfo)
                         texImgs[fImgInfo] = len(texImgs)
-                        texImgSlots.append(frameImg.name)
+                        texImgSlots.append(frameImgName)
                     processedKfs.append((f + frameStart, texImgs[fImgInfo] + 1))
                 fc = action.fcurves.new(f"brres.textures.coll_[{texIdx}].activeImgSlot")
                 fc.keyframe_points.add(len(kfs))
@@ -1254,12 +1254,15 @@ class BRRESImporter():
                 slotIdcs = {s: i for i, s in enumerate(texImgSlots)}
                 nameSortKeys = {}
                 for imgName in texImgSlots:
-                    dotIdx = imgName.rfind(".")
-                    postDot = imgName[dotIdx + 1:]
-                    if postDot.isdigit():
-                        nameSortKeys[imgName] = (imgName[:dotIdx], int(postDot))
+                    if imgName is None:
+                        nameSortKeys[imgName] = ("", -1)
                     else:
-                        nameSortKeys[imgName] = (imgName, -1)
+                        dotIdx = imgName.rfind(".")
+                        postDot = imgName[dotIdx + 1:]
+                        if postDot.isdigit():
+                            nameSortKeys[imgName] = (imgName[:dotIdx], int(postDot))
+                        else:
+                            nameSortKeys[imgName] = (imgName, -1)
                 sortedNames = sorted(texImgSlots, key=lambda n, k=nameSortKeys: k[n])
                 texImgMap = {slotIdcs[n]: i for i, n in enumerate(sortedNames)}
                 slotSortMap[texIdx] = texImgMap
@@ -1284,7 +1287,10 @@ class BRRESImporter():
                     tex = textures[texIdx]
                     texImgs = tex.imgs
                     for imgIdx in sortedTexImgs:
-                        texImgs.add(False).img = bpy.data.images[texImgSlots[imgIdx]]
+                        texImg = texImgs.add(False)
+                        imgName = texImgSlots[imgIdx]
+                        if imgName is not None:
+                            texImg.img = bpy.data.images[texImgSlots[imgIdx]]
                     # if the original image (from the mdl0, not pat0) has been re-added,
                     # make the new version the active one and remove the original
                     # if it hasn't, move it to the end so that the fcurves will work

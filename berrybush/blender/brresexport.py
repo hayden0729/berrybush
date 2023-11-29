@@ -1064,9 +1064,10 @@ class BRRESPatExporter(BRRESAnimExporter[pat0.PAT0]):
             matAnim.texAnims[texIdx] = texAnim
             texImgs = mat.brres.textures[texIdx].imgs
             for texImg in texImgs:
-                if texImg.img not in parentResExporter.images and parentResExporter.onlyUsedImg:
-                    self.parentResExporter.exportImg(texImg.img)
-                texAnim.texNames.append(parentResExporter.imgName(texImg.img))
+                img = texImg.img
+                if img and img not in parentResExporter.images and parentResExporter.onlyUsedImg:
+                    self.parentResExporter.exportImg(img)
+                texAnim.texNames.append(parentResExporter.imgName(img))
             # fill out animation data by evaluating curve
             frameIdcs = []
             frameVals = []

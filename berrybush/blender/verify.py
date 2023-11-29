@@ -44,13 +44,15 @@ def verifyBRRES(op: "VerifyBRRES", context: bpy.types.Context):
     for mat in usedMats:
         # textures w/o images & images w/ dimensions that aren't powers of 2
         for tex in mat.brres.textures:
-            img = tex.activeImg
-            if img is None:
-                numProblems += 1
-                e = f"Texture '{tex.name}' of material '{mat.name}' lacks a valid active image"
-                op.report({'INFO'}, e)
-                continue
-            images.add(img)
+            for slot, texImg in enumerate(tex.imgs, 1):
+                img = texImg.img
+                if img is None:
+                    numProblems += 1
+                    e = (f"Animation slot {slot} for texture '{tex.name}' of material '{mat.name}' "
+                         f"is empty")
+                    op.report({'INFO'}, e)
+                    continue
+                images.add(img)
         # materials w/o tev configs
         try:
             tev = context.scene.brres.tevConfigs[mat.brres.tevID]
