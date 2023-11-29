@@ -1306,6 +1306,9 @@ class BRRESImporter():
         self.models[model] = BRRESMdlImporter(self, model)
 
     def _loadImg(self, img: tex0.TEX0, plt: plt0.PLT0 = None):
+        if self.settings.existingImages and img.name in bpy.data.images:
+            self.images[(img.name, plt.name if plt else None)] = img.name
+            return bpy.data.images[img.name]
         fmts = {
             tex0.I4: 'I4',
             tex0.I8: 'I8',
@@ -1387,6 +1390,12 @@ class ImportBRRES(bpy.types.Operator, ImportHelper):
         name="Custom Normals",
         description="Use imported normals (otherwise, Blender will calculate them)",
         default=True
+    )
+
+    existingImages: bpy.props.BoolProperty(
+        name="Use Existing Images",
+        description="When an image being imported has the same name as one that already exists, use that one instead", # pylint: disable=line-too-long
+        default=False
     )
 
     sscMode: bpy.props.EnumProperty(
@@ -1506,6 +1515,7 @@ class GeneralPanel(ImportPanel):
         layout.prop(settings, "multiMatMeshes")
         layout.prop(settings, "useAttrNames")
         layout.prop(settings, "customNormals")
+        layout.prop(settings, "existingImages")
         layout.prop(settings, "scale")
 
 
