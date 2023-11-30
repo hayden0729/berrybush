@@ -1,8 +1,6 @@
 # standard imports
 from cProfile import Profile
-from datetime import datetime
 from functools import cache
-from pathlib import Path
 from pstats import SortKey, Stats
 import os
 from typing import Generic, TypeVar
@@ -12,6 +10,7 @@ from bpy_extras.io_utils import ExportHelper, axis_conversion
 from mathutils import Euler, Matrix, Vector
 import numpy as np
 # internal imports
+from .backup import tryBackup
 from .common import (
     MTX_TO_BONE, MTX_FROM_BONE, MTX_TO_BRRES, LOG_PATH,
     solidView, restoreView, limitIncludes, usedMatSlots, makeUniqueName, foreachGet, getLayerData,
@@ -1484,12 +1483,6 @@ class ExportBRRES(bpy.types.Operator, ExportHelper):
         default=16
     )
 
-    doBackup: bpy.props.BoolProperty(
-        name="Create Backup",
-        description="If a file with this name already exists, create a backup",
-        default=True
-    )
-
     doMerge: bpy.props.BoolProperty(
         name="Merge Files",
         description="If a file with this name already exists, also include its sub-files not overwritten by the current model in the export", # pylint: disable=line-too-long
@@ -1641,16 +1634,11 @@ class ExportBRRES(bpy.types.Operator, ExportHelper):
         context.window.cursor_set('WAIT')
         self.report({'INFO'}, "Exporting BRRES...")
         baseData = b""
-        if self.doMerge or self.doBackup: # get existing data for merge/backup
+        tryBackup(self.filepath, context)
+        if self.doMerge: # get existing data for merge/backup
             try:
                 with open(self.filepath, "rb") as f:
                     baseData = f.read()
-                    if self.doBackup: # back up data into another file if enabled
-                        path = Path(self.filepath)
-                        backupLabel = datetime.now().strftime("_backup_%Y-%m-%d_%H-%M-%S")
-                        backupPath = Path(path.parent, path.stem + backupLabel + path.suffix)
-                        with open(str(backupPath), "wb") as f:
-                            f.write(baseData)
             except FileNotFoundError:
                 pass
         with open(self.filepath, "wb") as f: # export main file
@@ -1703,7 +1691,6 @@ class GeneralPanel(ExportPanel):
         # everything else
         layout.prop(settings, "limitTo")
         layout.prop(settings, "scale")
-        layout.prop(settings, "doBackup")
         layout.prop(settings, "doMerge")
 
 

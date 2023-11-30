@@ -22,11 +22,13 @@ import bpy
 import bpy.utils.previews
 # internal imports
 from .blender import (
+    backup,
     bone,
     brresexport,
     brresimport,
     material,
     mesh,
+    preferences,
     proputils,
     render,
     scene,
@@ -114,6 +116,7 @@ classes = (
     brresexport.AnimPanel,
     render.FilmPanel,
     # operators
+    backup.ClearBackups,
     proputils.CustomIDCollOpAdd,
     proputils.CustomIDCollOpRemove,
     proputils.CustomIDCollOpClone,
@@ -126,6 +129,8 @@ classes = (
     verify.VerifyBRRES,
     updater.UpdateBRRES,
     updater.UpdateVertColors1_1_0,
+    # preferences
+    preferences.BerryBushPreferences,
     # render engine
     render.BRRESRenderEngine
 )
