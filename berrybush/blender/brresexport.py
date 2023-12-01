@@ -955,10 +955,8 @@ class BRRESChrExporter(BRRESAnimExporter[chr0.CHR0]):
                     keyframes = emptyKfs[frameFltr].copy()
                     keyframes[:, 1] = compVals[frameFltr]
                     anim.keyframes = keyframes
-                    # then, further simplify lossily if enabled
-                    if settings.doAnimSimplify:
-                        anim.setSmooth()
-                        anim.simplify(settings.animMaxError)
+                    # then, further simplify (lossily if enabled)
+                    anim.simplify(settings.animMaxError if settings.doAnimSimplify else 0)
             # determine whether discrete format is worth it (would save space) for rotation
             # (only test for rotation as it's not supported for scale or translation)
             rotLength = sum(max(a.keyframes[-1, 0], 0) + 1 for a in jointAnim.rot)

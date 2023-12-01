@@ -16,7 +16,10 @@ def interpolateCurve(curve: np.ndarray, x: np.ndarray) -> np.ndarray:
     x2 = curve[..., 1, 0]
     y2 = curve[..., 1, 1]
     t2 = curve[..., 1, 2]
-    span = x2 - x1
+    span = np.atleast_1d(x2 - x1)
+    # where span is 0, set to 1 to prevent division by 0 errors
+    # (this will result in arbitrarily taking left control point)
+    span[span == 0] = 1
     # https://www.cubic.org/docs/hermite.htm
     fac = (x - x1) / span
     fac2 = fac ** 2
@@ -38,18 +41,7 @@ def interpolateCurve(curve: np.ndarray, x: np.ndarray) -> np.ndarray:
     # https://en.wikipedia.org/wiki/Cubic_Hermite_spline#Interpolation_on_an_arbitrary_interval
     y = h1 * y1 + h2 * y2 + (h3 * t1 + h4 * t2) * span
     yp = (h1p * y1 + h2p * y2 + (h3p * t1 + h4p * t2) * span) / span
-    interpolated = np.stack((x, y, yp), axis=-1)
-    # finally, where span is 0, arbitrarily take right control point (we get nan otherwise)
-    noSpan = span == 0
-    if np.isscalar(noSpan):
-        # if there's only one curve, we can't use the general method bc noSpan is just a boolean
-        # so, we handle it this way instead
-        if noSpan:
-            interpolated[x == curve[1, 0]] = curve[:, 1]
-    else:
-        # general case - we have a bunch of curves, so noSpan will vary for each position
-        interpolated[noSpan] = curve[noSpan, 1]
-    return interpolated
+    return np.stack((x, y, yp), axis=-1)
 
 
 def interpolateSpline(spline: np.ndarray, positions: np.ndarray) -> np.ndarray:
@@ -87,7 +79,11 @@ def simplifySpline(spline: np.ndarray, maxError: float, precision: float = 1) ->
     numPositions = int(np.ceil((spline[-1, 0] - spline[0, 0]) / precision)) * precision + 1
     positions = np.linspace(spline[0, 0], spline[-1, 0], numPositions)
     # maxError *= np.ptp(spline[..., 1]) # uncomment for a "relative" error rather than absolute
-    return simplifySplineRough(interpolateSpline(spline, positions), maxError)
+    simplified = simplifySplineRough(interpolateSpline(spline, positions), maxError)
+    # since we do simplification based on the interpolated, it's possible (though rare) that
+    # the "simplified" version will actually be larger than the original
+    # in that case, just return the original
+    return min(spline, simplified, key=len)
 
 
 def simplifySplineRough(points: np.ndarray, maxError: float) -> np.ndarray:
