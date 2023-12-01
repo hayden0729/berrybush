@@ -1603,6 +1603,7 @@ class ExportBRRES(bpy.types.Operator, ExportHelper):
     animMaxError: bpy.props.FloatProperty(
         name="Simplify Curves",
         description="How much the exported animation is allowed to deviate from the original at any given frame", # pylint: disable=line-too-long
+        min=0,
         default=.01
     )
 
