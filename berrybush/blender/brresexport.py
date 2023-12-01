@@ -1521,7 +1521,7 @@ class ExportBRRES(bpy.types.Operator, ExportHelper):
     doQuantize: bpy.props.BoolProperty(
         name="Simplify Weights",
         description="Quantize vertex weights to a fixed interval before normalization (good for file size, performance, & preventing crashes)", # pylint: disable=line-too-long
-        default=False,
+        default=True,
     )
 
     quantizeSteps: bpy.props.FloatProperty(
@@ -1595,13 +1595,13 @@ class ExportBRRES(bpy.types.Operator, ExportHelper):
     )
 
     doAnimSimplify: bpy.props.BoolProperty(
-        name="Simplify",
+        name="Simplify Curves",
         description="Lossily compress CHR & SRT animations by simplifying baked animation data",
-        default=False
+        default=True
     )
 
     animMaxError: bpy.props.FloatProperty(
-        name="Simplify",
+        name="Simplify Curves",
         description="How much the exported animation is allowed to deviate from the original at any given frame", # pylint: disable=line-too-long
         default=.01
     )
