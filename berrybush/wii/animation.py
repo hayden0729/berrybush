@@ -86,7 +86,7 @@ class Animation():
 
     def simplify(self, maxError: float):
         """Simplify this animation's keyframes based on a max error allowed at each frame."""
-        if len(self.keyframes) > 1: # this condition isn't necessary, just a slight optimization
+        if len(self.keyframes) > 2: # this condition isn't necessary, just a slight optimization
             self.keyframes = simplifySpline(self.keyframes, maxError)
 
     def interpolate(self, frames: np.ndarray) -> np.ndarray:
