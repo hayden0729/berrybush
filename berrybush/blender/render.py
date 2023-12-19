@@ -1164,7 +1164,7 @@ class BRRESRenderEngine(bpy.types.RenderEngine):
         if not self.is_preview:
             bgl.glDepthMask(True)
             bgl.glStencilMask(0xFF)
-        offscreen = gpu.types.GPUOffScreen(*dims)
+        offscreen = gpu.types.GPUOffScreen(*dims, format='RGBA32F')
         with offscreen.bind():
             fb: gpu.types.GPUFrameBuffer = gpu.state.active_framebuffer_get()
             if self.is_preview:
