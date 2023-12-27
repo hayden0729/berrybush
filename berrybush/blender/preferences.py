@@ -2,7 +2,7 @@
 import bpy
 import bpy.utils.previews
 # internal imports
-from .common import UI_COL_SEP, drawCheckedProp
+from .common import drawColumnSeparator, drawCheckedProp
 
 
 ADDON_IDNAME = __name__.split(".", maxsplit=1)[0]
@@ -42,7 +42,7 @@ class BerryBushPreferences(bpy.types.AddonPreferences):
         col = self.layout.column()
         col.enabled = self.doBackups
         col.prop(self, "backupDir")
-        col.separator(factor=UI_COL_SEP)
+        drawColumnSeparator(col)
         drawCheckedProp(col, self, "doMaxBackups", self, "maxBackups")
         self.layout.operator("brres.clear_backups")
 

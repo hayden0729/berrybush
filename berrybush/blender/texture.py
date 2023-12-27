@@ -2,7 +2,10 @@
 import bpy
 import numpy as np
 # internal imports
-from .common import UNDOCUMENTED, UI_COL_SEP, PropertyPanel, drawCheckedProp, drawProp, filterMats
+from .common import (
+    UNDOCUMENTED, PropertyPanel,
+    drawColumnSeparator, drawCheckedProp, drawProp, filterMats
+)
 from .proputils import CustomIDPropertyGroup
 from .verify import WarningSuppressionProperty, drawWarningUI
 from ..wii import gx
@@ -382,13 +385,13 @@ class TexSettingsPanel(TexSubPanel):
         activeImg = texSettings.activeImg
         col.enabled = activeImg is not None and len(activeImg.brres.mipmaps) > 0
         col.row().prop(texSettings, "mipFilter", expand=True)
-        col.separator(factor=UI_COL_SEP)
+        drawColumnSeparator(col)
         col.prop(texSettings, "lodBias")
-        col.separator(factor=UI_COL_SEP)
+        drawColumnSeparator(col)
         col.row().prop(texSettings, "maxAnisotropy", expand=True)
-        col.separator(factor=UI_COL_SEP)
+        drawColumnSeparator(col)
         col.prop(texSettings, "clampBias")
-        col.separator(factor=UI_COL_SEP)
+        drawColumnSeparator(col)
         col.prop(texSettings, "texelInterpolate")
         # everything else
         drawCheckedProp(layout, texSettings, "useCam", texSettings, "camSlot")

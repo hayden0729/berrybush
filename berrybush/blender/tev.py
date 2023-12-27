@@ -1,7 +1,7 @@
 # third party imports
 import bpy
 # internal imports
-from .common import UNDOCUMENTED, UI_COL_SEP, PropertyPanel, drawProp, drawIcon
+from .common import UNDOCUMENTED, PropertyPanel, drawProp, drawIcon, drawColumnSeparator
 from .proputils import CustomIDPropertyGroup
 from ..wii import gx
 from ..wii.alias import alias
@@ -666,27 +666,27 @@ class TevStageIndPanel(TevStageSubPanel):
         layout = layout.column()
         layout.enabled = indSettings.enable
         drawProp(layout, indSettings, "slot", icon=stageSettings.indIcon(context))
-        layout.separator(factor=UI_COL_SEP)
+        drawColumnSeparator(layout)
         layout.row().prop(indSettings, "fmt", expand=True)
-        layout.separator(factor=UI_COL_SEP)
+        drawColumnSeparator(layout)
         layout.prop(indSettings, "enableBias", index=0, text="Alpha Bias")
-        layout.separator(factor=UI_COL_SEP)
+        drawColumnSeparator(layout)
         layout.prop(indSettings, "enableBias", index=1, text="Blue Bias")
-        layout.separator(factor=UI_COL_SEP)
+        drawColumnSeparator(layout)
         layout.prop(indSettings, "enableBias", index=2, text="Green Bias")
-        layout.separator(factor=UI_COL_SEP)
+        drawColumnSeparator(layout)
         layout.row().prop(indSettings, "bumpAlphaComp", expand=True)
-        layout.separator(factor=UI_COL_SEP)
+        drawColumnSeparator(layout)
         layout.prop(indSettings, "mtxType")
-        layout.separator(factor=UI_COL_SEP)
+        drawColumnSeparator(layout)
         layout.prop(indSettings, "mtxSlot")
-        layout.separator(factor=UI_COL_SEP)
+        drawColumnSeparator(layout)
         layout.prop(indSettings, "wrapU")
-        layout.separator(factor=UI_COL_SEP)
+        drawColumnSeparator(layout)
         layout.prop(indSettings, "wrapV")
-        layout.separator(factor=UI_COL_SEP)
+        drawColumnSeparator(layout)
         layout.prop(indSettings, "utcLOD")
-        layout.separator(factor=UI_COL_SEP)
+        drawColumnSeparator(layout)
         layout.prop(indSettings, "addPrev")
 
 

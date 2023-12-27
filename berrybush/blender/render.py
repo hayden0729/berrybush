@@ -10,7 +10,8 @@ import numpy as np
 # internal imports
 from .common import ( # pylint: disable=unused-import
     LOG_PATH, PropertyPanel,
-    enumVal, foreachGet, getLoopVertIdcs, getLoopFaceIdcs, getFaceMatIdcs, getLayerData
+    drawColumnSeparator, enumVal, foreachGet,
+    getLoopVertIdcs, getLoopFaceIdcs, getFaceMatIdcs, getLayerData
 )
 from .brresexport import IMG_FMTS, padImgData
 from .glslstruct import GLSLBool, GLSLInt, GLSLFloat, GLSLVec, GLSLArr, GLSLMat, GLSLStruct
@@ -1215,9 +1216,13 @@ class FilmPanel(PropertyPanel):
         scene = context.scene
         render = scene.render
         layout.prop(render, "film_transparent")
-        row = layout.row()
-        row.prop(scene.brres, "renderIgnoreBG")
-        row.enabled = render.film_transparent
+        col = layout.row().column()
+        col.prop(scene.brres, "renderIgnoreBG")
+        drawColumnSeparator(col)
+        col.prop(scene.brres, "renderAssumeOpaque")
+        drawColumnSeparator(col)
+        col.prop(scene.brres, "renderNoTransparentOverwrite")
+        col.enabled = render.film_transparent
 
     @classmethod
     def poll(cls, context: bpy.types.Context):

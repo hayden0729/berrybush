@@ -2,7 +2,8 @@
 import bpy
 # internal imports
 from .common import (
-    UNDOCUMENTED, UI_COL_SEP, PropertyPanel, drawCheckedProp, drawProp, getPropName, filterMats
+    UNDOCUMENTED, PropertyPanel,
+    drawColumnSeparator, drawCheckedProp, drawProp, getPropName, filterMats
 )
 from .proputils import CloneablePropertyGroup, CustomIDPropertyGroup
 from .texture import TexSettings, TextureTransform
@@ -823,7 +824,7 @@ class AlphaSettingsPanel(PropertyPanel):
         col = layout.column()
         col.enabled = alphaSettings.enableBlendOp and alphaSettings.blendOp == "+"
         col.prop(alphaSettings, "blendSrcFactor")
-        col.separator(factor=UI_COL_SEP)
+        drawColumnSeparator(col)
         col.prop(alphaSettings, "blendDstFactor")
         row = layout.row()
         row.enabled = not alphaSettings.enableBlendOp
@@ -865,7 +866,7 @@ class DepthSettingsPanel(PropertyPanel):
         col = layout.column()
         col.enabled = depthSettings.enableDepthTest
         col.prop(depthSettings, "enableDepthUpdate")
-        col.separator(factor=UI_COL_SEP)
+        drawColumnSeparator(col)
         col.prop(depthSettings, "depthFunc")
 
 

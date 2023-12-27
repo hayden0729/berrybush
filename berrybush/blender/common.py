@@ -11,7 +11,6 @@ import numpy as np
 
 UNDOCUMENTED = "Undocumented"
 LOG_PATH = pathlib.Path(__file__).parent.parent / "log.txt"
-UI_COL_SEP = .2 # extra separation between rows that must be added for column layouts
 
 
 # in general, blender uses z for up and -y for forward, while brres uses y for up and z for forward
@@ -108,6 +107,14 @@ def paragraphLabel(layout: bpy.types.UILayout, text: str, widthChars = 55):
         row.alignment = 'EXPAND'
         row.scale_y = 0.6
         row.label(text=textRow)
+
+
+def drawColumnSeparator(column: bpy.types.UILayout):
+    """Draw a separator on a column layout to get standard spacing.
+    
+    (By default, column layouts are more tightly packed than regular layouts)
+    """
+    column.separator(factor=0.2)
 
 
 def usedMatSlots(obj: bpy.types.Object, mesh: bpy.types.Mesh):
