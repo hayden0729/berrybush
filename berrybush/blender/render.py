@@ -460,12 +460,13 @@ class MaterialInfo:
 
     def update(self, mat: bpy.types.Material):
         """Update this material info based on a Blender material."""
+        scene = bpy.context.scene
         rMat = self.mat
         brres = mat.brres
         rMat.name = mat.name
         # tev settings
         try:
-            tev = bpy.context.scene.brres.tevConfigs[brres.tevID]
+            tev = scene.brres.tevConfigs[brres.tevID]
             rMat.colorSwaps = tuple(tuple(enumVal(s, c) for c in "rgba") for s in tev.colorSwaps)
             enabledStages = tuple(stage for stage in tev.stages if not stage.hide)
             rMat.numStages = len(enabledStages)
@@ -513,8 +514,13 @@ class MaterialInfo:
         rMat.alphaTestComps = tuple(enumVal(alphaSettings, f"testComp{i + 1}") for i in range(2))
         rMat.alphaTestLogic = enumVal(alphaSettings, "testLogic")
         rMat.alphaTestEnable = True
-        rMat.enableConstAlpha = alphaSettings.enableConstVal
-        rMat.constAlpha = alphaSettings.constVal
+        assumeOpaqueMats = scene.render.film_transparent and scene.brres.renderAssumeOpaqueMats
+        if assumeOpaqueMats and not rMat.enableBlend:
+            rMat.enableConstAlpha = True
+            rMat.constAlpha = 1
+        else:
+            rMat.enableConstAlpha = alphaSettings.enableConstVal
+            rMat.constAlpha = alphaSettings.constVal
         # depth settings
         depthSettings = brres.depthSettings
         rMat.enableDepthTest = depthSettings.enableDepthTest
@@ -541,8 +547,7 @@ class MainBRRESRenderer():
     """Renders a Blender BRRES scene without any post-processing."""
 
     def __init__(self, previewMode = False):
-        self.ignoreBG = False # for "ignore background" film option
-        """Whether to draw "shadows" behind objects to disable blending with the background."""
+        self.noTransparentOverwrite = False
         self.shader: gpu.types.GPUShader = None
         self.materials: dict[str, MaterialInfo] = {}
         self.objects: dict[str, ObjectInfo] = {}
@@ -589,10 +594,10 @@ class MainBRRESRenderer():
         # fragment outputs
         shaderInfo.fragment_out(0, 'VEC4', "fragOutput")
         # compile
-        shaderPath = (pathlib.Path(__file__).parent/"shaders").resolve()
-        with open(f"{shaderPath}/vertex.glsl", "r", encoding="utf-8") as f:
+        shaderPath = (pathlib.Path(__file__).parent / "shaders").resolve()
+        with open(shaderPath / "vertex.glsl", "r", encoding="utf-8") as f:
             shaderInfo.vertex_source(f.read())
-        with open(f"{shaderPath}/fragment.glsl", "r", encoding="utf-8") as f:
+        with open(shaderPath / "fragment.glsl", "r", encoding="utf-8") as f:
             shaderInfo.fragment_source(f.read())
         return gpu.shader.create_from_info(shaderInfo)
 
@@ -797,7 +802,8 @@ class MainBRRESRenderer():
         # update scene render settings
         if depsgraph.id_type_updated('SCENE'):
             scene = depsgraph.scene
-            self.ignoreBG = isFinal and scene.render.film_transparent and scene.brres.renderIgnoreBG
+            isTransparent = isFinal and scene.render.film_transparent
+            self.noTransparentOverwrite = isTransparent and scene.brres.renderNoTransparentOverwrite
         # remove deleted stuff
         isObjUpdate = depsgraph.id_type_updated('OBJECT')
         visObjs = set(depsgraph.objects)
@@ -879,19 +885,45 @@ class MainBRRESRenderer():
         This effectively makes it so that in these areas, the destination color (if referenced in
         an operation such as blending) will just be the source color instead.
 
-        This only does anything if background ignoring is enabled.
+        (This was used for the removed "Ignore Background" feature, taken out because it's not
+        actually that useful and creates artifacts when low-opacity objects are drawn then blended
+        over by others)
         """
-        if self.ignoreBG:
-            # disable blending & logic op, as the whole point is to ignore the current dst color
+        # disable blending & logic op, as the whole point is to ignore the current dst color
+        bgl.glDisable(bgl.GL_BLEND)
+        bgl.glDisable(bgl.GL_COLOR_LOGIC_OP)
+        bgl.glStencilFunc(bgl.GL_NOTEQUAL, True, 0xFF)
+        bgl.glColorMask(True, True, True, False)
+        bgl.glDepthMask(False)
+        batch.draw(self.shader)
+        bgl.glDepthMask(True)
+        bgl.glColorMask(True, True, True, True)
+        bgl.glStencilFunc(bgl.GL_ALWAYS, True, 0xFF)
+
+    def enableBlend(self, equation: int):
+        """Enable blending and specify an equation for color.
+
+        Alpha equation may differ depending on render settings.
+        """
+        bgl.glEnable(bgl.GL_BLEND)
+        if self.noTransparentOverwrite:
+            bgl.glBlendEquationSeparate(equation, bgl.GL_MAX)
+        else:
+            bgl.glBlendEquation(equation)
+
+    def disableBlend(self):
+        """Effectively disable color blending.
+
+        Note that alpha blending may technically still be enabled if preventing transparent
+        overwrites is enabled.
+        """
+        if self.noTransparentOverwrite:
+            bgl.glEnable(bgl.GL_BLEND)
+            bgl.glBlendEquationSeparate(bgl.GL_FUNC_ADD, bgl.GL_MAX)
+            bgl.glBlendFunc(bgl.GL_ONE, bgl.GL_ZERO)
+        else:
             bgl.glDisable(bgl.GL_BLEND)
-            bgl.glDisable(bgl.GL_COLOR_LOGIC_OP)
-            bgl.glStencilFunc(bgl.GL_NOTEQUAL, True, 0xFF)
-            bgl.glColorMask(True, True, True, False)
-            bgl.glDepthMask(False)
-            batch.draw(self.shader)
-            bgl.glDepthMask(True)
-            bgl.glColorMask(True, True, True, True)
-            bgl.glStencilFunc(bgl.GL_ALWAYS, True, 0xFF)
+
 
     def draw(self, projectionMtx: Matrix, viewMtx: Matrix):
         """Draw the current BRRES scene to the active framebuffer."""
@@ -963,19 +995,16 @@ class MainBRRESRenderer():
                     # blending & logic op
                     if shaderMat.enableBlend:
                         bgl.glDisable(bgl.GL_COLOR_LOGIC_OP)
-                        self.drawShadow(batch)
-                        # do blending
-                        bgl.glEnable(bgl.GL_BLEND)
                         if shaderMat.blendSubtract:
-                            bgl.glBlendEquation(bgl.GL_FUNC_SUBTRACT)
+                            self.enableBlend(bgl.GL_FUNC_SUBTRACT)
                             bgl.glBlendFunc(bgl.GL_ONE, bgl.GL_ONE)
                         else:
-                            bgl.glBlendEquation(bgl.GL_FUNC_ADD)
+                            self.enableBlend(bgl.GL_FUNC_ADD)
                             bgl.glBlendFunc(shaderMat.blendSrcFac, shaderMat.blendDstFac)
                     else:
-                        bgl.glDisable(bgl.GL_BLEND)
-                        self.drawShadow(batch)
+                        self.disableBlend()
                         if shaderMat.enableBlendLogic:
+                            bgl.glDisable(bgl.GL_BLEND)
                             bgl.glEnable(bgl.GL_COLOR_LOGIC_OP)
                             bgl.glLogicOp(shaderMat.blendLogicOp)
                         else:
@@ -1039,17 +1068,17 @@ class BRRESRenderEngine(bpy.types.RenderEngine):
         shaderInfo = gpu.types.GPUShaderCreateInfo()
         shaderInfo.sampler(0, 'FLOAT_2D', "tex")
         shaderInfo.push_constant('BOOL', "doAlpha")
+        shaderInfo.push_constant('BOOL', "undoPremul")
         shaderInfo.vertex_in(0, 'VEC2', "position")
         interfaceInfo = gpu.types.GPUStageInterfaceInfo("shader_interface")
         interfaceInfo.smooth('VEC2', "fragPosition")
         shaderInfo.vertex_out(interfaceInfo)
         shaderInfo.fragment_out(0, 'VEC4', "fragOutput")
-        vertSrc = "gl_Position = vec4(position, 1, 1); fragPosition = position;"
-        shaderInfo.vertex_source(f"void main() {{{vertSrc}}}")
-        alphaOutput = "pow(texture(tex, fragPosition / 2 + .5), vec4(2.2, 2.2, 2.2, 1.0))"
-        opaqueOutput = "vec4(pow(texture(tex, fragPosition / 2 + .5).rgb, vec3(2.2)), 1.0)"
-        fragSrc = f"fragOutput = (doAlpha) ? {alphaOutput} : {opaqueOutput};"
-        shaderInfo.fragment_source(f"void main() {{{fragSrc}}}")
+        shaderPath = (pathlib.Path(__file__).parent / "shaders" / "postprocess").resolve()
+        with open(shaderPath / "vertex.glsl", "r", encoding="utf-8") as f:
+            shaderInfo.vertex_source(f.read())
+        with open(shaderPath / "fragment.glsl", "r", encoding="utf-8") as f:
+            shaderInfo.fragment_source(f.read())
         return gpu.shader.create_from_info(shaderInfo)
 
     def _updateDims(self, dims: tuple[int, int]):
@@ -1114,7 +1143,7 @@ class BRRESRenderEngine(bpy.types.RenderEngine):
         except AttributeError:
             pass
 
-    def drawScene(self, projectionMtx: Matrix, viewMtx: Matrix, doAlpha = False):
+    def drawScene(self, projectionMtx: Matrix, viewMtx: Matrix, doAlpha = False, undoPremul = True):
         # get active framebuffer for re-bind to fix the problem described in _updateDims,
         # since it also gets triggered when the offscreen is bound immediately after creation
         # (seemingly not necessary after first frame, but i'm doing it every time anyway to be safe)
@@ -1134,6 +1163,7 @@ class BRRESRenderEngine(bpy.types.RenderEngine):
         bgl.glBindTexture(bgl.GL_TEXTURE_2D, self.offscreen.color_texture)
         self.shader.bind()
         self.shader.uniform_bool("doAlpha", [doAlpha])
+        self.shader.uniform_bool("undoPremul", [undoPremul])
         self.batch.draw(self.shader)
 
     def drawPreview(self, projectionMtx: Matrix, viewMtx: Matrix):
@@ -1157,7 +1187,9 @@ class BRRESRenderEngine(bpy.types.RenderEngine):
         dims = (int(render.resolution_x * scale), int(render.resolution_y * scale))
         self._updateDims(dims)
         result = self.begin_result(0, 0, *dims, layer=depsgraph.view_layer.name)
-        if self.is_preview and not self.mainRenderer.isPreviewWithFloor():
+        doAlpha = render.film_transparent
+        doPremul = doAlpha and scene.brres.renderUndoPremul
+        if doPremul or (self.is_preview and not self.mainRenderer.isPreviewWithFloor()):
             self.backgroundColor = (0, 0, 0)
         projectionMtx = scene.camera.calc_matrix_camera(depsgraph, x=dims[0], y=dims[1])
         viewMtx = scene.camera.matrix_world.inverted()
@@ -1171,7 +1203,7 @@ class BRRESRenderEngine(bpy.types.RenderEngine):
             if self.is_preview:
                 self.drawPreview(projectionMtx, viewMtx)
             else:
-                self.drawScene(projectionMtx, viewMtx, doAlpha=render.film_transparent)
+                self.drawScene(projectionMtx, viewMtx, doAlpha, doPremul)
             b = gpu.types.Buffer('FLOAT', (dims[0] * dims[1], 4))
             fb.read_color(0, 0, *dims, 4, 0, 'FLOAT', data=b)
             result.layers[0].passes["Combined"].rect.foreach_set(b)
@@ -1217,9 +1249,9 @@ class FilmPanel(PropertyPanel):
         render = scene.render
         layout.prop(render, "film_transparent")
         col = layout.row().column()
-        col.prop(scene.brres, "renderIgnoreBG")
+        col.prop(scene.brres, "renderUndoPremul")
         drawColumnSeparator(col)
-        col.prop(scene.brres, "renderAssumeOpaque")
+        col.prop(scene.brres, "renderAssumeOpaqueMats")
         drawColumnSeparator(col)
         col.prop(scene.brres, "renderNoTransparentOverwrite")
         col.enabled = render.film_transparent
