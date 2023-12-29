@@ -1068,7 +1068,6 @@ class BRRESRenderEngine(bpy.types.RenderEngine):
         shaderInfo = gpu.types.GPUShaderCreateInfo()
         shaderInfo.sampler(0, 'FLOAT_2D', "tex")
         shaderInfo.push_constant('BOOL', "doAlpha")
-        shaderInfo.push_constant('BOOL', "undoPremul")
         shaderInfo.vertex_in(0, 'VEC2', "position")
         interfaceInfo = gpu.types.GPUStageInterfaceInfo("shader_interface")
         interfaceInfo.smooth('VEC2', "fragPosition")
@@ -1143,7 +1142,7 @@ class BRRESRenderEngine(bpy.types.RenderEngine):
         except AttributeError:
             pass
 
-    def drawScene(self, projectionMtx: Matrix, viewMtx: Matrix, doAlpha = False, undoPremul = True):
+    def drawScene(self, projectionMtx: Matrix, viewMtx: Matrix, doAlpha = False):
         # get active framebuffer for re-bind to fix the problem described in _updateDims,
         # since it also gets triggered when the offscreen is bound immediately after creation
         # (seemingly not necessary after first frame, but i'm doing it every time anyway to be safe)
@@ -1163,7 +1162,6 @@ class BRRESRenderEngine(bpy.types.RenderEngine):
         bgl.glBindTexture(bgl.GL_TEXTURE_2D, self.offscreen.color_texture)
         self.shader.bind()
         self.shader.uniform_bool("doAlpha", [doAlpha])
-        self.shader.uniform_bool("undoPremul", [undoPremul])
         self.batch.draw(self.shader)
 
     def drawPreview(self, projectionMtx: Matrix, viewMtx: Matrix):
@@ -1187,9 +1185,8 @@ class BRRESRenderEngine(bpy.types.RenderEngine):
         dims = (int(render.resolution_x * scale), int(render.resolution_y * scale))
         self._updateDims(dims)
         result = self.begin_result(0, 0, *dims, layer=depsgraph.view_layer.name)
-        doAlpha = render.film_transparent
-        doPremul = doAlpha and scene.brres.renderUndoPremul
-        if doPremul or (self.is_preview and not self.mainRenderer.isPreviewWithFloor()):
+        isTransparentRender = render.film_transparent and not self.is_preview
+        if isTransparentRender or (self.is_preview and not self.mainRenderer.isPreviewWithFloor()):
             self.backgroundColor = (0, 0, 0)
         projectionMtx = scene.camera.calc_matrix_camera(depsgraph, x=dims[0], y=dims[1])
         viewMtx = scene.camera.matrix_world.inverted()
@@ -1203,7 +1200,7 @@ class BRRESRenderEngine(bpy.types.RenderEngine):
             if self.is_preview:
                 self.drawPreview(projectionMtx, viewMtx)
             else:
-                self.drawScene(projectionMtx, viewMtx, doAlpha, doPremul)
+                self.drawScene(projectionMtx, viewMtx, isTransparentRender)
             b = gpu.types.Buffer('FLOAT', (dims[0] * dims[1], 4))
             fb.read_color(0, 0, *dims, 4, 0, 'FLOAT', data=b)
             result.layers[0].passes["Combined"].rect.foreach_set(b)
@@ -1249,8 +1246,6 @@ class FilmPanel(PropertyPanel):
         render = scene.render
         layout.prop(render, "film_transparent")
         col = layout.row().column()
-        col.prop(scene.brres, "renderUndoPremul")
-        drawColumnSeparator(col)
         col.prop(scene.brres, "renderAssumeOpaqueMats")
         drawColumnSeparator(col)
         col.prop(scene.brres, "renderNoTransparentOverwrite")

@@ -8,13 +8,6 @@ class SceneSettings(bpy.types.PropertyGroup):
 
     tevConfigs: TevSettings.CustomIDCollectionProperty()
 
-    renderUndoPremul: bpy.props.BoolProperty(
-        name="Convert Premultiplied Alpha",
-        description="Counter artifacts created by the background using a conversion from premultiplied to straight alpha, intended for layering on top of other images after rendering. Only affects transparent renders (not viewport).\n\nNote that better results may be achieved by disabling this setting and using a world color similar to the final background image. Overlaying directly within the model will always yield the best results if possible", # pylint: disable=line-too-long
-        default=False,
-        options=set()
-    )
-
     renderAssumeOpaqueMats: bpy.props.BoolProperty(
         name="Assume Opaque Materials",
         description="For materials with blending disabled, write an alpha of 1 (opaque). Only affects transparent renders (not viewport)", # pylint: disable=line-too-long
