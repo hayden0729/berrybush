@@ -1557,8 +1557,15 @@ class MaterialWriter(MaterialSerializer["MDL0Writer"], Writer, StrPoolWriteMixin
             cmd = gx.IndCoordScale(i)
             cmd.bits.scales = (tex.coordScales for tex in texs)
             indCmds.append(cmd)
-        indCmds += [cmd for i, indSRT in enumerate(mat.indSRTs) for cmd in indSRT.toMtxSettings(i)]
+        mtxCmds = [[cmd for cmd in indSRT.toMtxSettings(i)] for i, indSRT in enumerate(mat.indSRTs)]
+        if mtxCmds:
+            # first ind mtx is grouped w/ coord scales; others are separate
+            # (unknown if others should be grouped together or separate from one another,
+            # as more than 2 matrices are never used in nsmbw - grouping together seems to work
+            # though, at least on dolphin)
+            indCmds += mtxCmds[0]
         cmds.append(indCmds)
+        cmds.append([cmd for mtx in mtxCmds[1:] for cmd in mtx])
         # process and pack commands
         packedCmds = b""
         for subset in cmds:
