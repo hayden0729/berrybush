@@ -87,7 +87,7 @@ class TexAnimWriter(TexAnimSerializer["MatAnimWriter"], Writer, StrPoolWriteMixi
     def numKeyframes(self):
         return max(len(d.getInstance().keyframes) for d in self.animData if isinstance(d, I12))
 
-    def _packAnims(self, data: list[Animation], identityVal: int):
+    def _packAnims(self, data: list[Animation], isScale = False):
         """Process animation data for one transformation.
         
         Return a tuple that contains a bunch of info about this data (e.g., whether it's isometric,
@@ -95,8 +95,10 @@ class TexAnimWriter(TexAnimSerializer["MatAnimWriter"], Writer, StrPoolWriteMixi
         """
         fixed = [False] * len(data)
         animData: list[I12 | float] = []
-        iso = all(c == data[0] for c in data) # iso: all components have the same data
-        for i, anim in enumerate(data if not iso else data[:1]):
+        # iso can only actually be written for scale, but knowing if data is iso is still useful
+        iso = all(c == data[0] for c in data)
+        writeIso = iso and isScale
+        for i, anim in enumerate(data if not writeIso else data[:1]):
             if len(anim.keyframes) == 1:
                 fixed[i] = True
                 animData.append(anim.keyframes[0, 1])
@@ -104,17 +106,18 @@ class TexAnimWriter(TexAnimSerializer["MatAnimWriter"], Writer, StrPoolWriteMixi
                 animData.append(I12().fromInstance(anim))
         if iso:
             fixed[:] = fixed[:1] * len(fixed)
+        identityVal = 1 if isScale else 0
         identity = iso and fixed[0] and data[0].keyframes[0, 1] == identityVal
         if identity:
             animData[:] = []
-        return (identity, iso, fixed, animData)
+        return (identity, writeIso, fixed, animData)
 
     def fromInstance(self, data: TexAnim):
         super().fromInstance(data)
         c = self._animCode
-        c.identityS, c.isoS, c.fixS, self._s = self._packAnims(data.scale, 1)
-        c.identityR, _, c.fixR, self._r = self._packAnims(data.rot, 0)
-        c.identityT, _, c.fixT, self._t = self._packAnims(data.trans, 0)
+        c.identityS, c.isoS, c.fixS, self._s = self._packAnims(data.scale, True)
+        c.identityR, _, c.fixR, self._r = self._packAnims(data.rot)
+        c.identityT, _, c.fixT, self._t = self._packAnims(data.trans)
         self._size = self._HEAD_STRCT.size + 4 * len(self.animData)
         return self
 
