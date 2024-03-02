@@ -798,7 +798,7 @@ class BRRESAnimImporter(Generic[ANIM_SUBFILE_T]):
         except KeyError:
             action = bpy.data.actions.new(actionName)
             self.parentImporter.actions[actionName] = action.name
-            action.use_fake_user = True
+            action.use_fake_user = False
             action.use_frame_range = True
             action.frame_start = self.parentImporter.settings.frameStart
             # subtract 1 as brres "length" is number of frames (including both endpoints),
