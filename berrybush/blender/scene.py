@@ -17,7 +17,7 @@ class SceneSettings(bpy.types.PropertyGroup):
 
     renderNoTransparentOverwrite: bpy.props.BoolProperty(
         name="Prevent Transparent Overwrites",
-        description="Always perform alpha blending by taking the maximum of the source and destination values. Only affects transparent renders (not viewport)", # pylint: disable=line-too-long
+        description="Always use blending factors '1' and '1 - Source' for alpha source & destination factors, respectively, independent from color blending. Prevents objects from being made more transparent by stuff in front of them. Only affects transparent renders (not viewport)", # pylint: disable=line-too-long
         default=True,
         options=set()
     )

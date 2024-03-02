@@ -802,7 +802,7 @@ class MainBRRESRenderer():
         # update scene render settings
         if depsgraph.id_type_updated('SCENE'):
             scene = depsgraph.scene
-            isTransparent = isFinal and scene.render.film_transparent
+            isTransparent = isFinal and not self.previewMode and scene.render.film_transparent
             self.noTransparentOverwrite = isTransparent and scene.brres.renderNoTransparentOverwrite
         # remove deleted stuff
         isObjUpdate = depsgraph.id_type_updated('OBJECT')
@@ -900,31 +900,6 @@ class MainBRRESRenderer():
         bgl.glColorMask(True, True, True, True)
         bgl.glStencilFunc(bgl.GL_ALWAYS, True, 0xFF)
 
-    def enableBlend(self, equation: int):
-        """Enable blending and specify an equation for color.
-
-        Alpha equation may differ depending on render settings.
-        """
-        bgl.glEnable(bgl.GL_BLEND)
-        if self.noTransparentOverwrite:
-            bgl.glBlendEquationSeparate(equation, bgl.GL_MAX)
-        else:
-            bgl.glBlendEquation(equation)
-
-    def disableBlend(self):
-        """Effectively disable color blending.
-
-        Note that alpha blending may technically still be enabled if preventing transparent
-        overwrites is enabled.
-        """
-        if self.noTransparentOverwrite:
-            bgl.glEnable(bgl.GL_BLEND)
-            bgl.glBlendEquationSeparate(bgl.GL_FUNC_ADD, bgl.GL_MAX)
-            bgl.glBlendFunc(bgl.GL_ONE, bgl.GL_ZERO)
-        else:
-            bgl.glDisable(bgl.GL_BLEND)
-
-
     def draw(self, projectionMtx: Matrix, viewMtx: Matrix):
         """Draw the current BRRES scene to the active framebuffer."""
         self.shader.bind()
@@ -996,13 +971,15 @@ class MainBRRESRenderer():
                     if shaderMat.enableBlend:
                         bgl.glDisable(bgl.GL_COLOR_LOGIC_OP)
                         if shaderMat.blendSubtract:
-                            self.enableBlend(bgl.GL_FUNC_SUBTRACT)
+                            bgl.glEnable(bgl.GL_BLEND)
+                            bgl.glBlendEquation(bgl.GL_FUNC_SUBTRACT)
                             bgl.glBlendFunc(bgl.GL_ONE, bgl.GL_ONE)
                         else:
-                            self.enableBlend(bgl.GL_FUNC_ADD)
+                            bgl.glEnable(bgl.GL_BLEND)
+                            bgl.glBlendEquation(bgl.GL_FUNC_ADD)
                             bgl.glBlendFunc(shaderMat.blendSrcFac, shaderMat.blendDstFac)
                     else:
-                        self.disableBlend()
+                        bgl.glDisable(bgl.GL_BLEND)
                         if shaderMat.enableBlendLogic:
                             bgl.glDisable(bgl.GL_BLEND)
                             bgl.glEnable(bgl.GL_COLOR_LOGIC_OP)
@@ -1019,7 +996,31 @@ class MainBRRESRenderer():
                     bgl.glDisable(bgl.GL_CULL_FACE)
                     bgl.glEnable(bgl.GL_DEPTH_TEST)
             # draw
-            batch.draw(self.shader)
+            if self.noTransparentOverwrite:
+                # draw color & alpha separately, w/ special attention to alpha blending
+                # https://en.wikipedia.org/wiki/Alpha_compositing
+                # (btw we can't just use glBlendFuncSeparate for this, bc that doesn't exist in bgl)
+
+                # note: this is done regardless of whether blending is enabled for this material.
+                # this is not required! it does mean that objects w/o blending will still have this
+                # special blending applied, but objects w/o blending should really not have alpha
+                # values anyway (and the "assume opaque materials" setting & constant alpha material
+                # setting take care of that in most cases where it does happen), so i can't really
+                # think of a use case either way
+                # tldr: shaderMat.enableBlend isn't taken into acccount rn, but that's arbitrary
+
+                # rgb
+                bgl.glColorMask(True, True, True, False)
+                batch.draw(self.shader)
+                # alpha
+                bgl.glColorMask(False, False, False, True)
+                bgl.glEnable(bgl.GL_BLEND)
+                bgl.glBlendEquation(bgl.GL_FUNC_ADD)
+                bgl.glBlendFunc(bgl.GL_ONE, bgl.GL_ONE_MINUS_SRC_ALPHA)
+                batch.draw(self.shader)
+                bgl.glColorMask(True, True, True, True)
+            else:
+                batch.draw(self.shader)
             # write constant alpha if enabled (must be done after blending, hence 2 draw calls)
             if not self.previewMode and matInfo and matInfo.mat.enableConstAlpha:
                 bgl.glDisable(bgl.GL_BLEND)
@@ -1029,6 +1030,7 @@ class MainBRRESRenderer():
                 bgl.glColorMask(False, False, False, True)
                 batch.draw(self.shader)
                 bgl.glColorMask(True, True, True, True)
+        # clean up gpu state
         if self.previewMode:
             gpu.state.depth_test_set('NONE')
         else:
