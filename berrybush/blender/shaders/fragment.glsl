@@ -277,24 +277,20 @@ bool alphaTest(float val) {
 
 
 void main() {
-    if (isConstAlphaWrite) {
+    initializeAttrArrs();
+    fragOutput = getTevOutput();
+    // alpha test
+    // note: alpha test can't actually be disabled in brres materials
+    // enable check just exists so that everything isn't discarded when ubo is empty (i.e., an object has no material set)
+    if (material.alphaTestEnable && !alphaTest(fragOutput.a)) {
+        discard;
+    }
+    if (forceOpaque) {
+        // little hack for some spots in blender where alpha gets weird (one of the many material preview issues)
+        fragOutput.a = 1.0;
+    }
+    else if (isConstAlphaWrite) {
         fragOutput.a = material.constAlpha;
     }
-    else {
-        initializeAttrArrs();
-        fragOutput = getTevOutput();
-        // alpha test
-        // note: alpha test can't actually be disabled in brres materials
-        // enable check just exists so that everything isn't discarded when ubo is empty (i.e., an object has no material set)
-        if (material.alphaTestEnable && !alphaTest(fragOutput.a)) {
-            discard;
-        }
-        // little hack for some spots in blender where alpha gets weird (one of the many material preview issues)
-        if (forceOpaque) {
-            fragOutput.a = 1.0;
-        }
-        // else {
-        //     fragOutput.rgb = fragNormal / 2 + .5;
-        // }
-    }
+    // fragOutput.rgb = fragNormal / 2 + .5;
 }
