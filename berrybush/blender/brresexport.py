@@ -650,12 +650,18 @@ class BRRESMdlExporter():
         """
         modelMtx = obj.matrix_local.copy()
         if self.hasBoneParent(obj):
-            # object is positioned relative to bone tail, but we want relative to head, so convert
-            parentLen = obj.parent.data.bones[obj.parent_bone].length
-            headRel = Matrix.Translation((0, parentLen, 0))
+            parentBone: bpy.types.Bone = obj.parent.data.bones[obj.parent_bone]
+            if parentBone.use_relative_parent:
+                # "relative parenting" means parent matrix isn't accounted for automatically
+                modelMtx = parentBone.matrix_local.inverted() @ modelMtx
+            else:
+                # object is positioned relative to bone tail, but we want relative to head
+                headCorrection = Matrix.Translation((0, parentBone.length, 0))
+                modelMtx = headCorrection @ modelMtx
+            # correct for bone space
             mtxBoneToBRRES = self.parentResExporter.mtxBoneToBRRES.to_4x4()
             coordConversion = MTX_FROM_BONE.to_4x4() @ mtxBoneToBRRES
-            modelMtx = coordConversion @ headRel @ modelMtx
+            modelMtx = coordConversion @ modelMtx
         mesh.transform(MTX_TO_BRRES @ modelMtx)
 
     def getVertDfs(self, mesh: bpy.types.Mesh, obj: bpy.types.Object) -> list[mdl0.Deformer]:
