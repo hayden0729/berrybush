@@ -2264,7 +2264,11 @@ class MDL0Reader(MDL0Serializer, SubfileReader):
     def _updateInstance(self):
         super()._updateInstance()
         if JointReader in self._sections:
-            self._data.rootJoint = self._getSectionInstances(JointReader)[0]
+            joints: list[Joint] = self._getSectionInstances(JointReader)
+            rootJoints = [j for j in joints if not j.parent]
+            self._data.rootJoint = rootJoints[0]
+            if len(rootJoints) > 1:
+                raise ValueError("BRRES models cannot have multiple root joints")
         self._data.tevConfigs = unique(self._getSectionInstances(TEVConfigReader))
         self._data.mats = self._getSectionInstances(MaterialReader)
         self._data.meshes = self._getSectionInstances(MeshReader)
