@@ -2,11 +2,12 @@
 import bpy
 import numpy as np
 # internal imports
-from .common import usedMatSlots, limitIncludes
+from .common import usedMatSlots
+from .limiter import ObjectLimiter, ObjectLimiterFactory
 from ..wii import gx
 
 
-def verifyBRRES(op: "VerifyBRRES", context: bpy.types.Context):
+def verifyBRRES(op: "VerifyBRRES", context: bpy.types.Context, limiter: ObjectLimiter):
     """Verify the scene's BRRES settings, reporting warnings.
 
     The number of warnings reported and number of warnings suppressed are returned.."""
@@ -16,9 +17,9 @@ def verifyBRRES(op: "VerifyBRRES", context: bpy.types.Context):
     images: set[bpy.types.Image] = set()
     # invalid attribute references
     for rigObj in bpy.data.objects:
-        if rigObj.type == 'ARMATURE' and limitIncludes(op.limitTo, rigObj):
+        if rigObj.type == 'ARMATURE' and limiter.includes(rigObj):
             for obj in bpy.data.objects:
-                if limitIncludes(op.limitTo, obj) and obj.parent is rigObj:
+                if limiter.includes(obj) and obj.parent is rigObj:
                     try:
                         mesh = obj.to_mesh()
                     except RuntimeError:
@@ -216,7 +217,8 @@ class VerifyBRRES(bpy.types.Operator):
 
     def execute(self, context: bpy.types.Context):
         self.report({'INFO'}, "Searching for BRRES warnings...")
-        warns, suppressed = verifyBRRES(self, context)
+        limiter = ObjectLimiterFactory.create(context, self.limitTo)
+        warns, suppressed = verifyBRRES(self, context, limiter)
         if warns:
             plural = "s" if warns > 1 else ""
             sup = f", plus {suppressed} suppressed" if suppressed else ""

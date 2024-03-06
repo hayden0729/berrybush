@@ -13,10 +13,11 @@ import numpy as np
 from .backup import tryBackup
 from .common import (
     MTX_TO_BONE, MTX_FROM_BONE, MTX_TO_BRRES, LOG_PATH,
-    solidView, restoreView, limitIncludes, usedMatSlots, makeUniqueName, foreachGet, getLayerData,
+    solidView, restoreView, usedMatSlots, makeUniqueName, foreachGet, getLayerData,
     getLoopVertIdcs, getLoopFaceIdcs, getFaceMatIdcs, getPropName, drawCheckedProp,
     simplifyLayerData, layerDataLoopDomain
 )
+from .limiter import ObjectLimiter, ObjectLimiterFactory
 from .material import AlphaSettings, DepthSettings, LightChannelSettings, MiscMatSettings
 from .tev import TevSettings, TevStageSettings
 from .texture import TexSettings
@@ -378,7 +379,7 @@ class BRRESMdlExporter():
         self.tevConfigs: dict[str, mdl0.TEVConfig] = {}
         self._meshes: dict[bpy.types.Object, list[mdl0.Mesh]] = {}
         for obj in bpy.data.objects:
-            if not limitIncludes(settings.limitTo, obj):
+            if not parentResExporter.limiter.includes(obj):
                 continue
             if settings.applyModifiers:
                 obj: bpy.types.Object = obj.evaluated_get(parentResExporter.depsgraph)
@@ -1226,9 +1227,10 @@ class BRRESVisExporter(BRRESAnimExporter[vis0.VIS0]):
 
 class BRRESExporter():
 
-    def __init__(self, settings: "ExportBRRES"):
+    def __init__(self, settings: "ExportBRRES", limiter: ObjectLimiter):
         self.res = brres.BRRES()
         self.settings = settings
+        self.limiter = limiter
         self.context: bpy.types.Context = None
         self.depsgraph: bpy.types.Depsgraph = None
         self.models: dict[bpy.types.Object, BRRESMdlExporter] = {}
@@ -1261,7 +1263,7 @@ class BRRESExporter():
                 self.exportImg(img)
         for obj in bpy.data.objects:
             # export armatures included in limit, as well as armature animations (chr/vis)
-            if obj.type == 'ARMATURE' and limitIncludes(settings.limitTo, obj):
+            if obj.type == 'ARMATURE' and self.limiter.includes(obj):
                 self._exportModel(obj)
                 if settings.doAnim and settings.includeArmAnims:
                     if obj.animation_data:
@@ -1308,13 +1310,14 @@ class BRRESExporter():
         self.res = baseRes
 
     @classmethod
-    def export(cls, context: bpy.types.Context, settings: "ExportBRRES", baseData = b"") -> bytes:
+    def export(cls, context: bpy.types.Context, settings: "ExportBRRES",
+               limiter: ObjectLimiter, baseData = b"") -> bytes:
         """Export a BRRES based on a Blender context & settings.
         
         Data for a "base BRRES" can be provided for merging (though this is only used if enabled in
         the settings).
         """
-        exporter = cls(settings)
+        exporter = cls(settings, limiter)
         exporter.update(context)
         # optionally merge with existing file
         if settings.doMerge and baseData:
@@ -1619,10 +1622,10 @@ class ExportBRRES(bpy.types.Operator, ExportHelper):
         default=1
     )
 
-    def verify(self, context: bpy.types.Context):
+    def verify(self, context: bpy.types.Context, limiter: ObjectLimiter):
         """Run the BRRES verifier based on the data exported by this exporter."""
         name = f"\"{os.path.basename(self.filepath)}\""
-        warns, suppressed = verifyBRRES(self, context)
+        warns, suppressed = verifyBRRES(self, context, limiter)
         if warns:
             plural = "s" if warns > 1 else ""
             sup = f" and {suppressed} suppressed" if suppressed else ""
@@ -1648,9 +1651,10 @@ class ExportBRRES(bpy.types.Operator, ExportHelper):
                     baseData = f.read()
             except FileNotFoundError:
                 pass
+        limiter = ObjectLimiterFactory.create(context, self.limitTo)
         with open(self.filepath, "wb") as f: # export main file
-            f.write(BRRESExporter.export(context, self, baseData))
-        self.verify(context)
+            f.write(BRRESExporter.export(context, self, limiter, baseData))
+        self.verify(context, limiter)
         context.window.cursor_set('DEFAULT')
         restoreView(restoreShading)
         profiler.disable()

@@ -69,17 +69,6 @@ def restoreView(spaceShadingTypes: dict[bpy.types.Space, str]):
         space.shading.type = shadingType
 
 
-def limitIncludes(limitTo: bool, obj: bpy.types.Object):
-    """Return True if an object should be included in a group based on a "limit to" setting."""
-    if obj.type == 'ARMATURE' and any(limitIncludes(limitTo, c) for c in obj.children_recursive):
-        return True
-    if limitTo == 'SELECTED':
-        return obj.select_get()
-    if limitTo == 'VISIBLE':
-        return not obj.hide_get()
-    return True
-
-
 def enumVal(data, propName: str, enumItem: str = None, callback = None):
     """Get the value for an enum property. If no enum item is provided, the active one is used.
 
