@@ -722,9 +722,9 @@ class MainBRRESRenderer():
         mesh.calc_normals_split()
         # generate a batch for each material used
         loopIdcs = foreachGet(mesh.loop_triangles, "loops", 3, np.uint32)
-        matIdcs = np.zeros(loopIdcs.shape)
+        matLoopIdcs = np.zeros(loopIdcs.shape)
         if len(mesh.materials) > 1: # lookup is wasteful if there's only one material
-            matIdcs = getFaceMatIdcs(mesh)[getLoopFaceIdcs(mesh)][loopIdcs]
+            matLoopIdcs = getFaceMatIdcs(mesh)[getLoopFaceIdcs(mesh)][loopIdcs]
         layerNames = (None, None)
         if self.previewMode:
             layerNames = (["Col"] * gx.MAX_CLR_ATTRS, ["UVMap"] * gx.MAX_UV_ATTRS)
@@ -733,14 +733,21 @@ class MainBRRESRenderer():
         attrs = getLoopAttrs(mesh, *layerNames)
         objInfo.batches.clear()
         noMat = np.full(loopIdcs.shape, len(mesh.materials) == 0) # all loops w/ no material
+        matSlotIdcs: dict[bpy.types.Material, list[int]] = {}
         for i, mat in enumerate(mesh.materials):
-            if mat is None:
-                noMat = np.logical_or(noMat, matIdcs == i)
-                continue
+            # get matSlotIdcs to contain the indices used for each material
+            # (may be multiple if the same material shows up in multiple slots)
+            if mat in matSlotIdcs:
+                matSlotIdcs[mat].append(i)
+            else:
+                matSlotIdcs[mat] = [i]
+        if None in matSlotIdcs:
+            noMat = np.logical_or(noMat, np.isin(noMat, matSlotIdcs.pop(None)))
+        for mat, idcs in matSlotIdcs.items():
             if mat.name not in self.materials:
                 self._updateMatCache(mat)
             matInfo = self.materials[mat.name]
-            idcs = loopIdcs[matIdcs == i]
+            idcs = loopIdcs[np.isin(matLoopIdcs, idcs)]
             objInfo.batches[matInfo] = self._genBatch('TRIS', attrs, idcs)
         if np.any(noMat):
             idcs = loopIdcs[noMat]
