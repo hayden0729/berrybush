@@ -47,14 +47,12 @@ class BRRESMdlImporter():
         self._sscControls: dict[mdl0.Joint, str] = {}
         self._scaledJointMtcs: dict[mdl0.Joint, np.ndarray] = {}
         self._loadJoints(model)
-        # load tev configs
-        self.tevConfigs: dict[mdl0.TEVConfig, str] = {}
-        for tevConfig in model.tevConfigs:
-            self._loadTevConfig(tevConfig)
         # load materials
+        self._tevConfigs: dict[mdl0.TEVConfig, str] = {}
         self.mats: dict[mdl0.Material, str] = {}
         for mat in model.mats:
             self._loadMat(mat)
+        self._ensureTevConfigsLoaded(model)
         # load meshes
         self._loadMeshes(model)
 
@@ -101,9 +99,12 @@ class BRRESMdlImporter():
                 uiParams.op = modelParams.op.name
                 uiParams.scale = modelParams.scale.name
 
-    def _loadTevConfig(self, tevConfig: mdl0.TEVConfig):
+    def _createTevConfig(self, tevConfig: mdl0.TEVConfig) -> str:
+        """Generate a Blender TEV config from a BRRES TEV config, and return its UUID.
+        
+        The importer is not automatically made aware of the new config.
+        """
         tevSettings = self.parentImporter.context.scene.brres.tevConfigs.add(False)
-        self.tevConfigs[tevConfig] = tevSettings.uuid
         # color swap table
         for mdlSwap, uiSwap in zip(tevConfig.colorSwaps, tevSettings.colorSwaps):
             uiSwap.r = mdlSwap.r.name
@@ -121,6 +122,51 @@ class BRRESMdlImporter():
                 # tev configs always need at least one stage
                 # once we've added our first stage, we can remove the one that was already here
                 tevSettings.stages.remove(0)
+        return tevSettings.uuid
+
+    def getTevConfigUUID(self, tevConfig: mdl0.TEVConfig):
+        """Get the UUID corresponding to some BRRES TEV config.
+
+        If it hasn't been imported yet, this imports it and returns the new UUID.
+        """
+        try:
+            return self._tevConfigs[tevConfig]
+        except KeyError:
+            # find duplicate if enabled
+            if self.parentImporter.settings.mergeMats:
+                for otherMdlImporter in self.parentImporter.models.values():
+                    for (otherConfig, otherUuid) in otherMdlImporter._tevConfigs.items():
+                        if tevConfig.isDuplicate(otherConfig):
+                            self._tevConfigs[tevConfig] = otherUuid
+                            return otherUuid
+            # if not enabled or no duplicate found, create a new one
+            uuid = self._createTevConfig(tevConfig)
+            self._tevConfigs[tevConfig] = uuid
+            return uuid
+
+    def _ensureTevConfigsLoaded(self, model: mdl0.MDL0):
+        """Ensure every TEV config in a model is imported.
+        
+        Additionally, perform some post-processing such as adding fake users and making names pretty
+        (none of which is necessary, but is nice).
+        """
+        scene = self.parentImporter.context.scene
+        for tevConfig in model.tevConfigs:
+            # this call to getTevConfigUUID() ensures each config actually gets loaded
+            uuid = self.getTevConfigUUID(tevConfig)
+            importedConfig = scene.brres.tevConfigs[uuid]
+            if not importedConfig.users:
+                importedConfig.fakeUser = True
+        # set tev config names to material names, just because literally anything is better than
+        # "TEV Config.009" or whatever
+        configNames: dict[mdl0.TEVConfig, str] = {}
+        for mat in model.mats:
+            # prioritize shorter names over longer ones
+            if mat.tevConfig not in configNames or len(mat.name) < len(configNames[mat.tevConfig]):
+                configNames[mat.tevConfig] = mat.name
+        sceneConfigs = {c.uuid: c for c in scene.brres.tevConfigs}
+        for (brresConfig, name) in configNames.items():
+            sceneConfigs[self.getTevConfigUUID(brresConfig)].name = name
 
     def _importTex(self, texSettings: TexSettings, tex: mdl0.Texture):
         # image
@@ -243,7 +289,7 @@ class BRRESMdlImporter():
         matSettings = blenderMat.brres
         # tev
         if mat.tevConfig is not None:
-            matSettings.tevID = self.tevConfigs[mat.tevConfig]
+            matSettings.tevID = self.getTevConfigUUID(mat.tevConfig)
         # textures
         matSettings.miscSettings.texTransformMode = TEX_TRANSFORM_MODES[mat.mtxGen]
         for tex in mat.textures:

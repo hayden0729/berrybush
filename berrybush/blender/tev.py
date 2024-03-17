@@ -2,7 +2,7 @@
 import bpy
 # internal imports
 from .common import UNDOCUMENTED, PropertyPanel, drawProp, drawIcon, drawColumnSeparator
-from .proputils import CustomIDPropertyGroup
+from .proputils import CustomIDPropertyGroup, UsableCustomIDPropertyGroup
 from ..wii import gx
 from ..wii.alias import alias
 
@@ -506,11 +506,18 @@ class ColorSwapSettings(bpy.types.PropertyGroup):
     a: bpy.props.EnumProperty(name="A", description="Alpha source", items=items, default='A', options=set()) # pylint: disable=line-too-long
 
 
-class TevSettings(CustomIDPropertyGroup):
+class TevSettings(UsableCustomIDPropertyGroup):
 
     @classmethod
     def getCloneSources(cls, context: bpy.types.Context):
         return {f"{s.name}/{t.name}": t for s in bpy.data.scenes for t in s.brres.tevConfigs}
+
+    def getUsers(self):
+        return sum(mat.brres.tevID == self.uuid for mat in bpy.data.materials)
+
+    @classmethod
+    def getMaybeUnused(cls):
+        return (tevConfig for scene in bpy.data.scenes for tevConfig in scene.brres.tevConfigs)
 
     @classmethod
     def defaultName(cls):
@@ -549,7 +556,7 @@ class TevPanel(PropertyPanel):
     def draw(self, context: bpy.types.Context):
         matSettings = context.material.brres
         layout = self.layout
-        context.scene.brres.tevConfigs.drawAccessor(layout, matSettings, "tevID")
+        context.scene.brres.tevConfigs.drawAccessor(context, layout, matSettings, "tevID")
 
 
 class TevSubPanel(PropertyPanel):

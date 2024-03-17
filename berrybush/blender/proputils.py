@@ -2,11 +2,17 @@
 from abc import abstractmethod
 import json
 import re
+from typing import TYPE_CHECKING
 from uuid import uuid4
 # 3rd party imports
 import bpy
 # internal imports
 from .common import makeUniqueName, parseDataPath
+# special typing imports
+if TYPE_CHECKING:
+    from typing_extensions import Self
+else:
+    Self = object
 
 
 def _clonePropertyGroup(src: bpy.types.PropertyGroup, dst: bpy.types.PropertyGroup,
@@ -91,11 +97,11 @@ class CloneablePropertyGroup(DynamicPropertyGroup):
     cloneOp: type[bpy.types.Operator]
 
     @classmethod
-    def getCloneSources(cls, context: bpy.types.Context) -> dict[str, bpy.types.PropertyGroup]:
+    def getCloneSources(cls, context: bpy.types.Context) -> dict[str, Self]:
         """Return a dict with the potential names & data from which this data can be cloned."""
         return {}
 
-    def cloneFrom(self, other: "CloneablePropertyGroup", rename = False):
+    def cloneFrom(self, other: Self, rename = False):
         """Clone another group's settings into this one."""
         keepIntact = {"uuid"}
         if not rename:
@@ -158,6 +164,8 @@ class CloneablePropertyGroup(DynamicPropertyGroup):
 class _CustomIDCollectionProperty(bpy.types.PropertyGroup):
 
     activeIdx: bpy.props.IntProperty()
+    # this is a CollectionProperty of the ID's type,
+    # set in CustomIDPropertyGroup.generateDynamicClasses()
     coll_: None
 
     def add(self, updateActive = True):
@@ -274,17 +282,19 @@ class _CustomIDCollectionProperty(bpy.types.PropertyGroup):
             except AttributeError:
                 pass
 
-    def drawAccessor(self, layout: bpy.types.UILayout, refData, refPropName: str):
+    def drawAccessor(self, context: bpy.types.Context, layout: bpy.types.UILayout,
+                     refData, refPropName: str):
         row = layout.row(align=True)
         collOps = []
         collOps.append(row.operator(CustomIDCollOpChoose.bl_idname, icon='PRESET', text=""))
         uuid = getattr(refData, refPropName)
         try:
             item = self[uuid]
-            collOps.append(row.operator(CustomIDCollOpClone.bl_idname, icon='DUPLICATE', text=""))
-            row.prop(item, "name", text="")
-            collOps.append(row.operator(CustomIDCollOpAdd.bl_idname, icon='ADD', text=""))
             collOps.append(row.operator(CustomIDCollOpClearSelection.bl_idname, icon='X', text=""))
+            collOps.append(row.operator(CustomIDCollOpAdd.bl_idname, icon='ADD', text=""))
+            row.prop(item, "name", text="", expand=True)
+            item.drawAccessorExtras(context, row)
+            collOps.append(row.operator(CustomIDCollOpClone.bl_idname, icon='DUPLICATE', text=""))
             item.drawCloneUI(row, text="")
             collOps.append(row.operator(CustomIDCollOpRemove.bl_idname, icon='TRASH', text=""))
         except KeyError:
@@ -313,7 +323,7 @@ class CustomIDPropertyGroup(CloneablePropertyGroup):
         # https://blender.stackexchange.com/questions/15122/collectionproperty-avoid-duplicate-names
         if name == "":
             return
-        names = {item.name for item in parseDataPath(repr(self), -1)}
+        names = {item.name for item in self._parentCollection}
         names.remove(self.name)
         newName = makeUniqueName(name, names)
         self["name"] = newName
@@ -334,9 +344,22 @@ class CustomIDPropertyGroup(CloneablePropertyGroup):
         return ""
 
     def initialize(self):
-        """Initialize this property group group after its creation."""
+        """Initialize this property group after its creation."""
         self.uuid = uuid4().hex
         self.name = self.defaultName()
+
+    def delete(self):
+        """Remove this property group from its parent collection."""
+        parentColl = self._parentCollection
+        parentColl.remove(parentColl.index(self.uuid))
+
+    @property
+    def _parentCollection(self) -> _CustomIDCollectionProperty:
+        return parseDataPath(repr(self), -1)
+
+    def chooserOptionDisplayName(self, context: bpy.types.Context):
+        """Name used by the item selection menu in the accessor UI."""
+        return self.name
 
     def drawListItem(self: bpy.types.UIList, context: bpy.types.Context, layout: bpy.types.UILayout,
                      data, item, icon: int, active_data, active_property: str, index=0, flt_flag=0):
@@ -346,6 +369,9 @@ class CustomIDPropertyGroup(CloneablePropertyGroup):
         # pylint: disable=attribute-defined-outside-init
         self.use_filter_show = False
         layout.prop(item, "name", text="", emboss=False)
+
+    def drawAccessorExtras(self, context: bpy.types.Context, layout: bpy.types.UILayout):
+        """Draw any extra fields for the ID accessor UI."""
 
     @classmethod
     def generateDynamicClasses(cls):
@@ -387,6 +413,56 @@ class CustomIDPropertyGroup(CloneablePropertyGroup):
         return bpy.props.PointerProperty(type=cls._collPropertyType, description=json.dumps(rules))
 
 
+class UsableCustomIDPropertyGroup(CustomIDPropertyGroup):
+    """Custom ID property group with users. Groups without any users are deleted on startup."""
+
+    fakeUser: bpy.props.BoolProperty(
+        name="Fake User",
+        description="Save this data-block even if it has no users",
+        default=False
+    )
+
+    @abstractmethod
+    def getUsers(self) -> int:
+        """Get the number of users this ID has."""
+
+    users: bpy.props.IntProperty(
+        name="Users",
+        description="Data with no users will be removed when the blend-file is reopened",
+        get=lambda self: self.getUsers(),
+        set=lambda self, v: None
+    )
+
+    @classmethod
+    @abstractmethod
+    def getMaybeUnused(cls) -> list[Self]:
+        """The IDs in the returned list are checked on startup, and those w/o users are deleted."""
+
+    def drawAccessorExtras(self, context: bpy.types.Context, layout: bpy.types.UILayout):
+        super().drawAccessorExtras(context, layout)
+        usersSublayout = layout.row(align=True)
+        usersSublayout.enabled = False
+        usersSublayout.scale_x = .5
+        usersSublayout.prop(self, "users", text="")
+        fakeUserIcon = "FAKE_USER_ON" if self.fakeUser else "FAKE_USER_OFF"
+        layout.prop(self, "fakeUser", text="", icon=fakeUserIcon)
+
+    def chooserOptionDisplayName(self, context: bpy.types.Context):
+        prefix = "F " if self.fakeUser else "  " if self.getUsers() else "0 "
+        return prefix + super().chooserOptionDisplayName(context)
+
+
+def getUnusedPropertyGroupRemovalHandler(*types: type[UsableCustomIDPropertyGroup]):
+    """Handler to delete the property groups w/o users for the given usable custom ID types."""
+    @bpy.app.handlers.persistent
+    def handler(_):
+        for idType in types:
+            for propGroup in idType.getMaybeUnused():
+                if not propGroup.fakeUser and not propGroup.getUsers():
+                    propGroup.delete()
+    return handler
+
+
 class CustomIDCollOp(bpy.types.Operator):
     """Manipulates a custom ID collection referenced through a property."""
 
@@ -398,12 +474,9 @@ class CustomIDCollOp(bpy.types.Operator):
     def _coll(self) -> _CustomIDCollectionProperty:
         return parseDataPath(self.collPath)
 
-    def testMethod(self):
-        return
-
 
 class CustomIDCollRefOp(CustomIDCollOp):
-    """Manipulates a custom ID collection and (sometimes optionally) a UUID ref to an item in it."""
+    """Manipulates a custom ID collection and a UUID reference to an item in it."""
 
     refPath: bpy.props.StringProperty()
     refProp: bpy.props.StringProperty()
@@ -419,13 +492,13 @@ class CustomIDCollRefOp(CustomIDCollOp):
     @property
     def _refID(self) -> str:
         if self._hasRefID:
-            return getattr(parseDataPath(self.refPath), self.refProp)
+            return getattr(self._refIDHolder, self.refProp)
         return None
 
     @_refID.setter
     def _refID(self, v: str):
         if self._hasRefID:
-            refIDHolder = parseDataPath(self.refPath)
+            refIDHolder = self._refIDHolder
             setattr(refIDHolder, self.refProp, v)
             refIDHolder.id_data.update_tag()
 
@@ -504,7 +577,11 @@ class CustomIDCollOpChoose(CustomIDCollRefOp):
         # can't use the _coll property directly because of some blender weirdness, so do this
         # (specifically, this isn't actually called by an instance of the operator; rather,
         # something else that's given its attributes but not its methods)
-        return tuple((item.uuid, item.name, "") for item in parseDataPath(self.collPath)) # pylint: disable=not-an-iterable
+        return tuple((
+            item.uuid,
+            item.chooserOptionDisplayName(context),
+            ""
+        ) for item in parseDataPath(self.collPath)) # pylint: disable=not-an-iterable
 
     chosenID: bpy.props.EnumProperty(items=options)
 

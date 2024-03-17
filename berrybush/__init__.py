@@ -136,6 +136,11 @@ classes = (
 )
 
 
+unusedPropertyGroupRemovalHandler = proputils.getUnusedPropertyGroupRemovalHandler(
+    tev.TevSettings
+)
+
+
 def register():
     global ICONS # pylint: disable=global-statement
     ICONS = bpy.utils.previews.new()
@@ -155,6 +160,7 @@ def register():
     bpy.types.TOPBAR_MT_file_export.append(brresexport.drawOp)
     bpy.types.VIEW3D_MT_object.append(verify.drawOp)
     bpy.app.handlers.load_post.append(updater.update)
+    bpy.app.handlers.load_post.append(unusedPropertyGroupRemovalHandler)
     bpy.app.handlers.save_pre.append(updater.saveVer)
     render.BRRESRenderEngine.registerOnPanels()
 
@@ -162,6 +168,7 @@ def register():
 def unregister():
     render.BRRESRenderEngine.unregisterOnPanels()
     bpy.app.handlers.save_pre.remove(updater.saveVer)
+    bpy.app.handlers.load_post.remove(unusedPropertyGroupRemovalHandler)
     bpy.app.handlers.load_post.remove(updater.update)
     bpy.types.VIEW3D_MT_object.remove(verify.drawOp)
     bpy.types.TOPBAR_MT_file_export.remove(brresexport.drawOp)
