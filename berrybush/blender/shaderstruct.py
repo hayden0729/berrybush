@@ -13,11 +13,11 @@ else:
     Self = object
 
 
-T = TypeVar("T", bound="RenderType")
-B = TypeVar("B", bound="BasicRenderType")
+T = TypeVar("T", bound="ShaderType")
+B = TypeVar("B", bound="BasicShaderType")
 
 
-class RenderType(Generic[T]):
+class ShaderType(Generic[T]):
     """GLSL type definition.
 
     Use in custom structs by type-hinting members with type instances that define their parameters
@@ -31,7 +31,7 @@ class RenderType(Generic[T]):
 
     @abstractmethod
     def getName(self) -> str:
-        """Get the name of this type as it would appear in GLSL code."""
+        """Get the name of this type as it would appear in shader code."""
 
     @abstractmethod
     def getSize(self) -> int:
@@ -46,8 +46,8 @@ class RenderType(Generic[T]):
         """Pack a value for this type to bytes."""
 
 
-class RenderSimpleType(RenderType):
-    """GLSL type definition that doesn't require instances for hinting, just the type itself."""
+class SimpleShaderType(ShaderType):
+    """Shader type definition that doesn't require instances for hinting, just the type itself."""
     # pylint:disable=arguments-differ
 
     @classmethod
@@ -71,7 +71,7 @@ class RenderSimpleType(RenderType):
         pass
 
 
-class BasicRenderType(RenderSimpleType):
+class BasicShaderType(SimpleShaderType):
     """Fundamental GLSL data type (int, float, etc)"""
 
     @classmethod
@@ -92,7 +92,7 @@ class BasicRenderType(RenderSimpleType):
         """Get the prefix for another type (vector or matrix) containing this type."""
 
 
-class RenderBool(BasicRenderType):
+class ShaderBool(BasicShaderType):
 
     @classmethod
     def getDefault(cls):
@@ -111,7 +111,7 @@ class RenderBool(BasicRenderType):
         return "b"
 
 
-class RenderInt(BasicRenderType):
+class ShaderInt(BasicShaderType):
 
     @classmethod
     def getName(cls):
@@ -126,7 +126,7 @@ class RenderInt(BasicRenderType):
         return "i"
 
 
-class RenderUInt(BasicRenderType):
+class ShaderUInt(BasicShaderType):
 
     @classmethod
     def getName(cls):
@@ -141,11 +141,11 @@ class RenderUInt(BasicRenderType):
         return "u"
 
 
-class RenderFloatType(BasicRenderType): # pylint: disable=abstract-method
+class ShaderFloatType(BasicShaderType): # pylint: disable=abstract-method
     pass
 
 
-class RenderFloat(RenderFloatType):
+class ShaderFloat(ShaderFloatType):
 
     @classmethod
     def getName(cls):
@@ -160,7 +160,7 @@ class RenderFloat(RenderFloatType):
         return ""
 
 
-class RenderDouble(RenderFloatType):
+class ShaderDouble(ShaderFloatType):
 
     @classmethod
     def getName(cls):
@@ -184,7 +184,7 @@ class RenderDouble(RenderFloatType):
 
 
 @dataclass(frozen=True)
-class RenderVec(RenderType[B]):
+class ShaderVec(ShaderType[B]):
 
     dtype: type[B]
     length: int
@@ -212,7 +212,7 @@ class RenderVec(RenderType[B]):
 
 
 @dataclass(frozen=True)
-class RenderArr(RenderType[T]):
+class ShaderArr(ShaderType[T]):
 
     dtype: type[T] | T
     length: int
@@ -227,8 +227,8 @@ class RenderArr(RenderType[T]):
     @cache
     def _isScalarOrVectorArr(self):
         return (
-            (isinstance(self.dtype, RenderVec)) or
-            (isinstance(self.dtype, type) and issubclass(self.dtype, BasicRenderType))
+            (isinstance(self.dtype, ShaderVec)) or
+            (isinstance(self.dtype, type) and issubclass(self.dtype, BasicShaderType))
         )
 
     @cache
@@ -254,9 +254,9 @@ class RenderArr(RenderType[T]):
         return packed + b"\x00" * (self.getSize() - len(packed))
 
 
-class RenderMat(RenderType):
+class ShaderMat(ShaderType):
 
-    def __init__(self, dtype: type[RenderFloatType], cols: int, rows: int = None):
+    def __init__(self, dtype: type[ShaderFloatType], cols: int, rows: int = None):
         self.dtype = dtype
         self.cols = cols
         self.rows = rows if rows else cols
@@ -272,15 +272,15 @@ class RenderMat(RenderType):
 
     @cache
     def getAlignment(self):
-        return RenderArr(RenderVec(self.dtype, self.rows), self.cols).getAlignment()
+        return ShaderArr(ShaderVec(self.dtype, self.rows), self.cols).getAlignment()
 
     @cache
     def getSize(self):
-        return RenderArr(RenderVec(self.dtype, self.rows), self.cols).getSize()
+        return ShaderArr(ShaderVec(self.dtype, self.rows), self.cols).getSize()
 
     @cache
     def packVal(self, val):
-        return RenderArr(RenderVec(self.dtype, self.rows), self.cols).packVal(val)
+        return ShaderArr(ShaderVec(self.dtype, self.rows), self.cols).packVal(val)
 
 
 def _renderField(name: str):
@@ -290,26 +290,26 @@ def _renderField(name: str):
     )
 
 
-class RenderStructMeta(type):
+class ShaderStructMeta(type):
 
     def __new__(mcs, clsname, bases, attrs):
         hasComplexFields = False
         attrs["_renderFieldTypes"] = fields = {}
         for fieldName, f in attrs.items():
-            if isinstance(f, RenderType) or (isinstance(f, type) and issubclass(f, RenderType)):
+            if isinstance(f, ShaderType) or (isinstance(f, type) and issubclass(f, ShaderType)):
                 attrs[fieldName] = _renderField(fieldName)
                 fields[fieldName] = f
-                if isinstance(f, type) and issubclass(f, RenderStruct):
+                if isinstance(f, type) and issubclass(f, ShaderStruct):
                     hasComplexFields = True
-                elif isinstance(f, RenderArr):
-                    if isinstance(f.dtype, type) and issubclass(f.dtype, RenderStruct):
+                elif isinstance(f, ShaderArr):
+                    if isinstance(f.dtype, type) and issubclass(f.dtype, ShaderStruct):
                         hasComplexFields = True
         attrs["_hasComplexFields"] = hasComplexFields # true for nested structs (see pack())
         return super().__new__(mcs, clsname, bases, attrs)
 
 
-class RenderStruct(RenderSimpleType, metaclass=RenderStructMeta):
-    """Custom struct type for GLSL. Subclass and add fields through RenderType instances.
+class ShaderStruct(SimpleShaderType, metaclass=ShaderStructMeta):
+    """Custom struct type for GLSL. Subclass and add fields through ShaderType instances.
 
     Load this struct into a Blender shader info object using the info's typedef_source() method with
     this class's getSource() result. Then, you can create uniform variables of this type using the
@@ -317,7 +317,7 @@ class RenderStruct(RenderSimpleType, metaclass=RenderStructMeta):
     results as data.
     """
 
-    _renderFieldTypes: dict[str, RenderType]
+    _renderFieldTypes: dict[str, ShaderType]
     _hasComplexFields: bool
 
     def __init__(self):
