@@ -13,11 +13,11 @@ else:
     Self = object
 
 
-T = TypeVar("T", bound="GLSLType")
-B = TypeVar("B", bound="GLSLBasicType")
+T = TypeVar("T", bound="RenderType")
+B = TypeVar("B", bound="BasicRenderType")
 
 
-class GLSLType(Generic[T]):
+class RenderType(Generic[T]):
     """GLSL type definition.
 
     Use in custom structs by type-hinting members with type instances that define their parameters
@@ -46,7 +46,7 @@ class GLSLType(Generic[T]):
         """Pack a value for this type to bytes."""
 
 
-class GLSLSimpleType(GLSLType):
+class RenderSimpleType(RenderType):
     """GLSL type definition that doesn't require instances for hinting, just the type itself."""
     # pylint:disable=arguments-differ
 
@@ -71,7 +71,7 @@ class GLSLSimpleType(GLSLType):
         pass
 
 
-class GLSLBasicType(GLSLSimpleType):
+class BasicRenderType(RenderSimpleType):
     """Fundamental GLSL data type (int, float, etc)"""
 
     @classmethod
@@ -92,7 +92,7 @@ class GLSLBasicType(GLSLSimpleType):
         """Get the prefix for another type (vector or matrix) containing this type."""
 
 
-class GLSLBool(GLSLBasicType):
+class RenderBool(BasicRenderType):
 
     @classmethod
     def getDefault(cls):
@@ -111,7 +111,7 @@ class GLSLBool(GLSLBasicType):
         return "b"
 
 
-class GLSLInt(GLSLBasicType):
+class RenderInt(BasicRenderType):
 
     @classmethod
     def getName(cls):
@@ -126,7 +126,7 @@ class GLSLInt(GLSLBasicType):
         return "i"
 
 
-class GLSLUInt(GLSLBasicType):
+class RenderUInt(BasicRenderType):
 
     @classmethod
     def getName(cls):
@@ -141,11 +141,11 @@ class GLSLUInt(GLSLBasicType):
         return "u"
 
 
-class GLSLFloatType(GLSLBasicType): # pylint: disable=abstract-method
+class RenderFloatType(BasicRenderType): # pylint: disable=abstract-method
     pass
 
 
-class GLSLFloat(GLSLFloatType):
+class RenderFloat(RenderFloatType):
 
     @classmethod
     def getName(cls):
@@ -160,7 +160,7 @@ class GLSLFloat(GLSLFloatType):
         return ""
 
 
-class GLSLDouble(GLSLFloatType):
+class RenderDouble(RenderFloatType):
 
     @classmethod
     def getName(cls):
@@ -184,7 +184,7 @@ class GLSLDouble(GLSLFloatType):
 
 
 @dataclass(frozen=True)
-class GLSLVec(GLSLType[B]):
+class RenderVec(RenderType[B]):
 
     dtype: type[B]
     length: int
@@ -212,7 +212,7 @@ class GLSLVec(GLSLType[B]):
 
 
 @dataclass(frozen=True)
-class GLSLArr(GLSLType[T]):
+class RenderArr(RenderType[T]):
 
     dtype: type[T] | T
     length: int
@@ -227,8 +227,8 @@ class GLSLArr(GLSLType[T]):
     @cache
     def _isScalarOrVectorArr(self):
         return (
-            (isinstance(self.dtype, GLSLVec)) or
-            (isinstance(self.dtype, type) and issubclass(self.dtype, GLSLBasicType))
+            (isinstance(self.dtype, RenderVec)) or
+            (isinstance(self.dtype, type) and issubclass(self.dtype, BasicRenderType))
         )
 
     @cache
@@ -254,9 +254,9 @@ class GLSLArr(GLSLType[T]):
         return packed + b"\x00" * (self.getSize() - len(packed))
 
 
-class GLSLMat(GLSLType):
+class RenderMat(RenderType):
 
-    def __init__(self, dtype: type[GLSLFloatType], cols: int, rows: int = None):
+    def __init__(self, dtype: type[RenderFloatType], cols: int, rows: int = None):
         self.dtype = dtype
         self.cols = cols
         self.rows = rows if rows else cols
@@ -272,44 +272,44 @@ class GLSLMat(GLSLType):
 
     @cache
     def getAlignment(self):
-        return GLSLArr(GLSLVec(self.dtype, self.rows), self.cols).getAlignment()
+        return RenderArr(RenderVec(self.dtype, self.rows), self.cols).getAlignment()
 
     @cache
     def getSize(self):
-        return GLSLArr(GLSLVec(self.dtype, self.rows), self.cols).getSize()
+        return RenderArr(RenderVec(self.dtype, self.rows), self.cols).getSize()
 
     @cache
     def packVal(self, val):
-        return GLSLArr(GLSLVec(self.dtype, self.rows), self.cols).packVal(val)
+        return RenderArr(RenderVec(self.dtype, self.rows), self.cols).packVal(val)
 
 
-def _glslField(name: str):
+def _renderField(name: str):
     return property(
         fget=lambda self: self._getField(name),
         fset=lambda self, v: self._setField(name, v)
     )
 
 
-class GLSLStructMeta(type):
+class RenderStructMeta(type):
 
     def __new__(mcs, clsname, bases, attrs):
         hasComplexFields = False
-        attrs["_glslFieldTypes"] = fields = {}
+        attrs["_renderFieldTypes"] = fields = {}
         for fieldName, f in attrs.items():
-            if isinstance(f, GLSLType) or (isinstance(f, type) and issubclass(f, GLSLType)):
-                attrs[fieldName] = _glslField(fieldName)
+            if isinstance(f, RenderType) or (isinstance(f, type) and issubclass(f, RenderType)):
+                attrs[fieldName] = _renderField(fieldName)
                 fields[fieldName] = f
-                if isinstance(f, type) and issubclass(f, GLSLStruct):
+                if isinstance(f, type) and issubclass(f, RenderStruct):
                     hasComplexFields = True
-                elif isinstance(f, GLSLArr):
-                    if isinstance(f.dtype, type) and issubclass(f.dtype, GLSLStruct):
+                elif isinstance(f, RenderArr):
+                    if isinstance(f.dtype, type) and issubclass(f.dtype, RenderStruct):
                         hasComplexFields = True
         attrs["_hasComplexFields"] = hasComplexFields # true for nested structs (see pack())
         return super().__new__(mcs, clsname, bases, attrs)
 
 
-class GLSLStruct(GLSLSimpleType, metaclass=GLSLStructMeta):
-    """Custom struct type for GLSL. Subclass and add fields through GLSL type instances.
+class RenderStruct(RenderSimpleType, metaclass=RenderStructMeta):
+    """Custom struct type for GLSL. Subclass and add fields through RenderType instances.
 
     Load this struct into a Blender shader info object using the info's typedef_source() method with
     this class's getSource() result. Then, you can create uniform variables of this type using the
@@ -317,19 +317,19 @@ class GLSLStruct(GLSLSimpleType, metaclass=GLSLStructMeta):
     results as data.
     """
 
-    _glslFieldTypes: dict[str, GLSLType]
+    _renderFieldTypes: dict[str, RenderType]
     _hasComplexFields: bool
 
     def __init__(self):
-        self._glslFieldVals = {n: t.getDefault() for n, t in self._glslFieldTypes.items()}
+        self._renderFieldVals = {n: t.getDefault() for n, t in self._renderFieldTypes.items()}
         self._packed: bytes | None = None
 
     def _getField(self, name: str):
-        return self._glslFieldVals[name]
+        return self._renderFieldVals[name]
 
     def _setField(self, name: str, v):
-        if self._glslFieldVals[name] != v:
-            self._glslFieldVals[name] = v
+        if self._renderFieldVals[name] != v:
+            self._renderFieldVals[name] = v
             # invalidate packed cache (literally the entire point of this function & _getField())
             self._packed = None
 
@@ -337,7 +337,7 @@ class GLSLStruct(GLSLSimpleType, metaclass=GLSLStructMeta):
     @cache
     def getSource(cls):
         """Return the GLSL definition for this struct."""
-        fields = "".join(f"{t.getName()} {name};" for name, t in cls._glslFieldTypes.items())
+        fields = "".join(f"{t.getName()} {name};" for name, t in cls._renderFieldTypes.items())
         return f"struct {cls.getName()} {{{fields}}};"
 
     @classmethod
@@ -353,14 +353,14 @@ class GLSLStruct(GLSLSimpleType, metaclass=GLSLStructMeta):
     @cache
     def getSize(cls) -> int:
         size = 0
-        for name, t in cls._glslFieldTypes.items():
+        for name, t in cls._renderFieldTypes.items():
             size = pad(size, t.getAlignment()) + t.getSize()
         return pad(size, cls.getAlignment())
 
     @classmethod
     @cache
     def getAlignment(cls):
-        return pad(max(t.getAlignment() for name, t in cls._glslFieldTypes.items()), 16)
+        return pad(max(t.getAlignment() for name, t in cls._renderFieldTypes.items()), 16)
 
     @classmethod
     def packVal(cls, val: Self) -> bytes:
@@ -369,7 +369,7 @@ class GLSLStruct(GLSLSimpleType, metaclass=GLSLStructMeta):
         if val._packed is not None:
             return val._packed
         packed = b""
-        for name, t in cls._glslFieldTypes.items():
+        for name, t in cls._renderFieldTypes.items():
             packed = pad(packed, t.getAlignment()) + t.packVal(getattr(val, name))
         packed = pad(packed, cls.getAlignment())
         # for efficiency, packed values are usually cached & cache is invalidated when fields change

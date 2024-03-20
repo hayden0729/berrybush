@@ -132,7 +132,7 @@ classes = (
     # preferences
     preferences.BerryBushPreferences,
     # render engine
-    render.BRRESRenderEngine
+    render.BerryBushRenderEngine
 )
 
 
@@ -162,11 +162,11 @@ def register():
     bpy.app.handlers.load_post.append(updater.update)
     bpy.app.handlers.load_post.append(unusedPropertyGroupRemovalHandler)
     bpy.app.handlers.save_pre.append(updater.saveVer)
-    render.BRRESRenderEngine.registerOnPanels()
+    render.BerryBushRenderEngine.registerOnPanels()
 
 
 def unregister():
-    render.BRRESRenderEngine.unregisterOnPanels()
+    render.BerryBushRenderEngine.unregisterOnPanels()
     bpy.app.handlers.save_pre.remove(updater.saveVer)
     bpy.app.handlers.load_post.remove(unusedPropertyGroupRemovalHandler)
     bpy.app.handlers.load_post.remove(updater.update)

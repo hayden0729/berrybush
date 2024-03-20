@@ -16,7 +16,9 @@ from .common import ( # pylint: disable=unused-import
     drawColumnSeparator, enumVal, foreachGet,
     getLoopVertIdcs, getLoopFaceIdcs, getFaceMatIdcs, getLayerData
 )
-from .glslstruct import GLSLBool, GLSLInt, GLSLFloat, GLSLVec, GLSLArr, GLSLMat, GLSLStruct
+from .renderstruct import (
+    RenderBool, RenderInt, RenderFloat, RenderVec, RenderArr, RenderMat, RenderStruct
+)
 from .material import ColorRegSettings, IndTransform, LightChannelSettings
 from .texture import TexSettings, TextureTransform
 from .tev import TevStageSettings
@@ -229,46 +231,46 @@ class BlendImageExtractor:
         return output
 
 
-class GLSLTevStageSels(GLSLStruct):
-    tex = GLSLInt
-    texSwap = GLSLInt
-    ras = GLSLInt
-    rasSwap = GLSLInt
+class RenderTevStageSels(RenderStruct):
+    tex = RenderInt
+    texSwap = RenderInt
+    ras = RenderInt
+    rasSwap = RenderInt
 
 
-class GLSLTevStageIndSettings(GLSLStruct):
-    texIdx = GLSLInt
-    fmt = GLSLInt
-    bias = GLSLVec(GLSLInt, 3)
-    bumpAlphaComp = GLSLInt
-    mtxType = GLSLInt
-    mtxIdx = GLSLInt
-    wrap = GLSLVec(GLSLInt, 2)
-    utcLOD = GLSLBool
-    addPrev = GLSLBool
+class RenderTevStageIndSettings(RenderStruct):
+    texIdx = RenderInt
+    fmt = RenderInt
+    bias = RenderVec(RenderInt, 3)
+    bumpAlphaComp = RenderInt
+    mtxType = RenderInt
+    mtxIdx = RenderInt
+    wrap = RenderVec(RenderInt, 2)
+    utcLOD = RenderBool
+    addPrev = RenderBool
 
 
-class GLSLTevStageCalcParams(GLSLStruct):
-    constSel = GLSLInt
-    args = GLSLVec(GLSLInt, 4)
-    compMode = GLSLBool
-    op = GLSLInt
-    scale = GLSLFloat
-    bias = GLSLFloat
-    compChan = GLSLInt
-    clamp = GLSLBool
-    outputIdx = GLSLInt
+class RenderTevStageCalcParams(RenderStruct):
+    constSel = RenderInt
+    args = RenderVec(RenderInt, 4)
+    compMode = RenderBool
+    op = RenderInt
+    scale = RenderFloat
+    bias = RenderFloat
+    compChan = RenderInt
+    clamp = RenderBool
+    outputIdx = RenderInt
 
 
-class GLSLTevStage(GLSLStruct):
-    sels = GLSLTevStageSels
-    ind = GLSLTevStageIndSettings
-    colorParams = GLSLTevStageCalcParams
-    alphaParams = GLSLTevStageCalcParams
+class RenderTevStage(RenderStruct):
+    sels = RenderTevStageSels
+    ind = RenderTevStageIndSettings
+    colorParams = RenderTevStageCalcParams
+    alphaParams = RenderTevStageCalcParams
 
     @classmethod
     def fromStageSettings(cls, stage: TevStageSettings):
-        rStage = GLSLTevStage()
+        rStage = RenderTevStage()
         # selections
         sels = stage.sels
         rSels = rStage.sels
@@ -309,11 +311,11 @@ class GLSLTevStage(GLSLStruct):
         return rStage
 
 
-class GLSLTexture(GLSLStruct):
-    mtx = GLSLMat(GLSLFloat, 2, 3)
-    dims = GLSLVec(GLSLInt, 2)
-    mapMode = GLSLInt
-    hasImg = GLSLBool
+class RenderTexture(RenderStruct):
+    mtx = RenderMat(RenderFloat, 2, 3)
+    dims = RenderVec(RenderInt, 2)
+    mapMode = RenderInt
+    hasImg = RenderBool
 
     def __init__(self):
         super().__init__()
@@ -356,33 +358,33 @@ class GLSLTexture(GLSLStruct):
         rTex.dims = tuple(img.size) if rTex.hasImg else (0, 0)
         rTex.mapMode = enumVal(tex, "mapMode", callback=type(tex).coordSrcItems)
         rTex.wrap = (TEX_WRAPS[tex.wrapModeU], TEX_WRAPS[tex.wrapModeV])
-        mipmapLevels = len(img.brres.mipmaps) if rTex.hasImg else 0
-        minFilter = f'{tex.minFilter}_MIPMAP_{tex.mipFilter}' if mipmapLevels > 0 else tex.minFilter
+        mmLevels = len(img.brres.mipmaps) if rTex.hasImg else 0
+        minFilter = f'{tex.minFilter}_MIPMAP_{tex.mipFilter}' if mmLevels > 0 else tex.minFilter
         rTex.filter = (TEX_FILTERS[minFilter], TEX_FILTERS[tex.magFilter])
         rTex.lodBias = tex.lodBias
         return rTex
 
 
-class GLSLIndTex(GLSLStruct):
-    texIdx = GLSLInt
-    mode = GLSLInt
-    lightIdx = GLSLInt
-    coordScale = GLSLVec(GLSLInt, 2)
+class RenderIndTex(RenderStruct):
+    texIdx = RenderInt
+    mode = RenderInt
+    lightIdx = RenderInt
+    coordScale = RenderVec(RenderInt, 2)
 
 
-class GLSLLightChanSettings(GLSLStruct):
-    difFromReg = GLSLBool
-    ambFromReg = GLSLBool
-    difMode = GLSLInt
-    atnMode = GLSLInt
-    enabledLights = GLSLArr(GLSLBool, 8)
+class RenderLightChanSettings(RenderStruct):
+    difFromReg = RenderBool
+    ambFromReg = RenderBool
+    difMode = RenderInt
+    atnMode = RenderInt
+    enabledLights = RenderArr(RenderBool, 8)
 
 
-class GLSLLightChan(GLSLStruct):
-    difReg = GLSLVec(GLSLFloat, 4)
-    ambReg = GLSLVec(GLSLFloat, 4)
-    colorSettings = GLSLLightChanSettings
-    alphaSettings = GLSLLightChanSettings
+class RenderLightChan(RenderStruct):
+    difReg = RenderVec(RenderFloat, 4)
+    ambReg = RenderVec(RenderFloat, 4)
+    colorSettings = RenderLightChanSettings
+    alphaSettings = RenderLightChanSettings
 
     def setRegs(self, lc: LightChannelSettings):
         """Update this light channel's diffuse/ambient registers from BRRES settings."""
@@ -391,7 +393,7 @@ class GLSLLightChan(GLSLStruct):
 
     @classmethod
     def fromLightChanSettings(cls, lc: LightChannelSettings):
-        rlc = GLSLLightChan()
+        rlc = RenderLightChan()
         rlc.setRegs(lc)
         rlcCA = (rlc.colorSettings, rlc.alphaSettings)
         lcCA = (lc.colorSettings, lc.alphaSettings)
@@ -404,24 +406,24 @@ class GLSLLightChan(GLSLStruct):
         return rlc
 
 
-class GLSLMaterial(GLSLStruct):
-    colorSwaps = GLSLArr(GLSLVec(GLSLInt, 4), gx.MAX_COLOR_SWAPS)
-    stages = GLSLArr(GLSLTevStage, gx.MAX_TEV_STAGES)
-    textures = GLSLArr(GLSLTexture, gx.MAX_TEXTURES)
-    inds = GLSLArr(GLSLIndTex, gx.MAX_INDIRECTS)
-    indMtcs = GLSLArr(GLSLMat(GLSLFloat, 2, 3), gx.MAX_INDIRECT_MTCS)
-    constColors = GLSLMat(GLSLFloat, gx.MAX_TEV_CONST_COLORS)
-    outputColors = GLSLMat(GLSLFloat, gx.MAX_TEV_STAND_COLORS + 1)
-    lightChans = GLSLArr(GLSLLightChan, gx.MAX_CLR_ATTRS)
-    enableBlend = GLSLBool
-    alphaTestVals = GLSLVec(GLSLFloat, 2)
-    alphaTestComps = GLSLVec(GLSLInt, 2)
-    alphaTestLogic = GLSLInt
-    alphaTestEnable = GLSLBool
-    constAlpha = GLSLFloat
-    numStages = GLSLInt
-    numTextures = GLSLInt
-    numIndMtcs = GLSLInt
+class RenderMaterial(RenderStruct):
+    colorSwaps = RenderArr(RenderVec(RenderInt, 4), gx.MAX_COLOR_SWAPS)
+    stages = RenderArr(RenderTevStage, gx.MAX_TEV_STAGES)
+    textures = RenderArr(RenderTexture, gx.MAX_TEXTURES)
+    inds = RenderArr(RenderIndTex, gx.MAX_INDIRECTS)
+    indMtcs = RenderArr(RenderMat(RenderFloat, 2, 3), gx.MAX_INDIRECT_MTCS)
+    constColors = RenderMat(RenderFloat, gx.MAX_TEV_CONST_COLORS)
+    outputColors = RenderMat(RenderFloat, gx.MAX_TEV_STAND_COLORS + 1)
+    lightChans = RenderArr(RenderLightChan, gx.MAX_CLR_ATTRS)
+    enableBlend = RenderBool
+    alphaTestVals = RenderVec(RenderFloat, 2)
+    alphaTestComps = RenderVec(RenderInt, 2)
+    alphaTestLogic = RenderInt
+    alphaTestEnable = RenderBool
+    constAlpha = RenderFloat
+    numStages = RenderInt
+    numTextures = RenderInt
+    numIndMtcs = RenderInt
 
     blendSubtract: bool = False
     blendSrcFac: int = 0
@@ -458,44 +460,44 @@ class GLSLMaterial(GLSLStruct):
         self.numIndMtcs = len(tfs)
 
 
-class GLSLMesh(GLSLStruct):
-    colors = GLSLArr(GLSLInt, gx.MAX_CLR_ATTRS)
-    uvs = GLSLArr(GLSLInt, gx.MAX_UV_ATTRS)
+class RenderMesh(RenderStruct):
+    colors = RenderArr(RenderInt, gx.MAX_CLR_ATTRS)
+    uvs = RenderArr(RenderInt, gx.MAX_UV_ATTRS)
 
 
-GLSL_STRUCTS = (
-    GLSLTevStageSels,
-    GLSLTevStageIndSettings,
-    GLSLTevStageCalcParams,
-    GLSLTevStage,
-    GLSLTexture,
-    GLSLIndTex,
-    GLSLLightChanSettings,
-    GLSLLightChan,
-    GLSLMaterial,
-    GLSLMesh
+RENDER_STRUCTS = (
+    RenderTevStageSels,
+    RenderTevStageIndSettings,
+    RenderTevStageCalcParams,
+    RenderTevStage,
+    RenderTexture,
+    RenderIndTex,
+    RenderLightChanSettings,
+    RenderLightChan,
+    RenderMaterial,
+    RenderMesh
 )
 
 
-class GLSLMaterialUpdater:
+class RenderMaterialUpdater:
 
-    _EMPTY_UBO_BYTES = b"\x00" * GLSLMaterial.getSize()
+    _EMPTY_UBO_BYTES = b"\x00" * RenderMaterial.getSize()
     EMPTY_UBO = gpu.types.GPUUniformBuf(_EMPTY_UBO_BYTES)
 
     def __init__(self):
-        self.mat = GLSLMaterial()
+        self.mat = RenderMaterial()
 
     def updateAnimation(self, mat: bpy.types.Material):
         """Update this material's animatable settings based on a Blender material."""
         brres = mat.brres
-        rMat = self.mat
+        renderMat = self.mat
         # color registers
-        rMat.setColorRegs(brres.colorRegs)
-        for lc, rlc in zip(brres.lightChans, rMat.lightChans):
+        renderMat.setColorRegs(brres.colorRegs)
+        for lc, rlc in zip(brres.lightChans, renderMat.lightChans):
             rlc.setRegs(lc)
         # texture matrices & active texture images
         tfGen = brres.miscSettings.getTexTransformGen()
-        for tex, rTex in zip(brres.textures, rMat.textures):
+        for tex, rTex in zip(brres.textures, renderMat.textures):
             rTex.setMtx(tex.transform, tfGen)
             if rTex.imgSlot != tex.activeImgSlot:
                 rTex.imgSlot = tex.activeImgSlot
@@ -505,76 +507,87 @@ class GLSLMaterialUpdater:
                     rTex.imgName = img.name
                 else:
                     rTex.hasImg = False
-        rMat.setIndMtcs(brres.indSettings.transforms, tfGen)
+        renderMat.setIndMtcs(brres.indSettings.transforms, tfGen)
 
     def update(self, mat: bpy.types.Material):
         """Update this material based on a Blender material."""
-        rMat = self.mat
+        renderMat = self.mat
         brres = mat.brres
-        rMat.name = mat.name
+        renderMat.name = mat.name
         # tev settings
         try:
             tev = bpy.context.scene.brres.tevConfigs[brres.tevID]
-            rMat.colorSwaps = tuple(tuple(enumVal(s, c) for c in "rgba") for s in tev.colorSwaps)
+            renderMat.colorSwaps = tuple(
+                tuple(enumVal(colorSwap, component) for component in "rgba")
+                for colorSwap in tev.colorSwaps
+            )
             enabledStages = tuple(stage for stage in tev.stages if not stage.hide)
-            rMat.numStages = len(enabledStages)
-            rMat.stages = tuple(GLSLTevStage.fromStageSettings(stage) for stage in enabledStages)
+            renderMat.numStages = len(enabledStages)
+            renderMat.stages = tuple(
+                RenderTevStage.fromStageSettings(stage) for stage in enabledStages
+            )
             indTexSlots = tev.indTexSlots
         except KeyError:
-            rMat.numStages = 0
+            renderMat.numStages = 0
             indTexSlots = (1, ) * gx.MAX_INDIRECTS
         # textures
         tfGen = brres.miscSettings.getTexTransformGen()
-        rMat.numTextures = len(brres.textures)
-        rMat.textures = tuple(GLSLTexture.fromTexSettings(tex, tfGen) for tex in brres.textures)
+        renderMat.numTextures = len(brres.textures)
+        renderMat.textures = tuple(
+            RenderTexture.fromTexSettings(texture, tfGen) for texture in brres.textures
+        )
         # indirect textures
-        rInds: list[GLSLIndTex] = []
+        rInds: list[RenderIndTex] = []
         for texSlot, ind in zip(indTexSlots, brres.indSettings.texConfigs):
             coordScale = tuple(int(s[4:]) for s in (ind.scaleU, ind.scaleV))
-            rInd = GLSLIndTex()
+            rInd = RenderIndTex()
             rInd.texIdx = texSlot - 1
             rInd.mode = enumVal(ind, "mode")
             rInd.lightIdx = ind.lightSlot - 1
             rInd.coordScale = coordScale
             rInds.append(rInd)
-        rMat.inds = tuple(rInds)
-        rMat.setIndMtcs(brres.indSettings.transforms, tfGen)
+        renderMat.inds = tuple(rInds)
+        renderMat.setIndMtcs(brres.indSettings.transforms, tfGen)
         # color regs
-        rMat.setColorRegs(brres.colorRegs)
+        renderMat.setColorRegs(brres.colorRegs)
         # light channels
-        rMat.lightChans = tuple(GLSLLightChan.fromLightChanSettings(lc) for lc in brres.lightChans)
+        renderMat.lightChans = tuple(
+            RenderLightChan.fromLightChanSettings(lightChan) for lightChan in brres.lightChans
+        )
         # alpha settings
         alphaSettings = brres.alphaSettings
-        rMat.enableBlend = alphaSettings.enableBlendOp
-        rMat.blendSubtract = alphaSettings.blendOp == 'SUBTRACT'
-        rMat.blendSrcFac = BLEND_FACS[alphaSettings.blendSrcFactor]
-        rMat.blendDstFac = BLEND_FACS[alphaSettings.blendDstFactor]
-        rMat.enableBlendLogic = alphaSettings.enableLogicOp
-        rMat.blendLogicOp = BLEND_LOGIC_OPS[alphaSettings.logicOp]
-        rMat.enableDither = alphaSettings.enableDither
-        rMat.blendUpdateColorBuffer = alphaSettings.enableColorUpdate
-        rMat.blendUpdateAlphaBuffer = alphaSettings.enableAlphaUpdate
-        rMat.enableCulling = alphaSettings.cullMode != 'NONE'
-        if rMat.enableCulling:
-            rMat.cullMode = CULL_MODES[alphaSettings.cullMode]
-        rMat.isXlu = alphaSettings.isXlu
-        rMat.alphaTestVals = tuple(alphaSettings.testVals)
-        rMat.alphaTestComps = tuple(enumVal(alphaSettings, f"testComp{i + 1}") for i in range(2))
-        rMat.alphaTestLogic = enumVal(alphaSettings, "testLogic")
-        rMat.alphaTestEnable = True
-        rMat.enableConstAlpha = alphaSettings.enableConstVal
-        rMat.constAlpha = alphaSettings.constVal
+        renderMat.enableBlend = alphaSettings.enableBlendOp
+        renderMat.blendSubtract = alphaSettings.blendOp == 'SUBTRACT'
+        renderMat.blendSrcFac = BLEND_FACS[alphaSettings.blendSrcFactor]
+        renderMat.blendDstFac = BLEND_FACS[alphaSettings.blendDstFactor]
+        renderMat.enableBlendLogic = alphaSettings.enableLogicOp
+        renderMat.blendLogicOp = BLEND_LOGIC_OPS[alphaSettings.logicOp]
+        renderMat.enableDither = alphaSettings.enableDither
+        renderMat.blendUpdateColorBuffer = alphaSettings.enableColorUpdate
+        renderMat.blendUpdateAlphaBuffer = alphaSettings.enableAlphaUpdate
+        renderMat.enableCulling = alphaSettings.cullMode != 'NONE'
+        if renderMat.enableCulling:
+            renderMat.cullMode = CULL_MODES[alphaSettings.cullMode]
+        renderMat.isXlu = alphaSettings.isXlu
+        renderMat.alphaTestVals = tuple(alphaSettings.testVals)
+        renderMat.alphaTestComps = tuple(
+            enumVal(alphaSettings, f"testComp{i + 1}") for i in range(2)
+        )
+        renderMat.alphaTestLogic = enumVal(alphaSettings, "testLogic")
+        renderMat.alphaTestEnable = True
+        renderMat.enableConstAlpha = alphaSettings.enableConstVal
+        renderMat.constAlpha = alphaSettings.constVal
         # depth settings
         depthSettings = brres.depthSettings
-        rMat.enableDepthTest = depthSettings.enableDepthTest
-        rMat.depthFunc = DEPTH_FUNCS[depthSettings.depthFunc]
-        rMat.enableDepthUpdate = depthSettings.enableDepthUpdate
+        renderMat.enableDepthTest = depthSettings.enableDepthTest
+        renderMat.depthFunc = DEPTH_FUNCS[depthSettings.depthFunc]
+        renderMat.enableDepthUpdate = depthSettings.enableDepthUpdate
 
 
-class GLSLMaterialUpdaterWithUBO(GLSLMaterialUpdater):
-    """Updates a GLSLMaterial and keeps track of a UBO for it."""
+class RenderMaterialUpdaterWithUBO(RenderMaterialUpdater):
+    """Updates a RenderMaterial and keeps track of a UBO for it."""
 
-    _EMPTY_UBO_BYTES = b"\x00" * GLSLMaterial.getSize()
+    _EMPTY_UBO_BYTES = b"\x00" * RenderMaterial.getSize()
     EMPTY_UBO = gpu.types.GPUUniformBuf(_EMPTY_UBO_BYTES)
 
     def __init__(self):
@@ -598,21 +611,21 @@ class MaterialManager:
 
 class ObjectInfo:
 
-    _EMPTY_UBO_BYTES = b"\x00" * GLSLMesh.getSize()
+    _EMPTY_UBO_BYTES = b"\x00" * RenderMesh.getSize()
 
     def __init__(self):
-        self.batches: dict[GLSLMaterialUpdaterWithUBO, gpu.types.GPUBatch] = {}
+        self.batches: dict[RenderMaterialUpdaterWithUBO, gpu.types.GPUBatch] = {}
         self.drawPrio = 0
         self.matrix: Matrix = Matrix.Identity(4)
         self.usedAttrs: set[str] = set()
-        self.mesh = GLSLMesh()
+        self.mesh = RenderMesh()
         self.ubo = gpu.types.GPUUniformBuf(self._EMPTY_UBO_BYTES)
 
 
 class TextureManager(ABC):
 
     @abstractmethod
-    def updateTexture(self, tex: GLSLTexture):
+    def updateTexture(self, tex: RenderTexture):
         """Update the data corresponding to a texture, creating if nonexistent."""
 
     @abstractmethod
@@ -632,11 +645,11 @@ class BglTextureManager(TextureManager):
 
     def __init__(self):
         super().__init__()
-        self._textures: dict[GLSLTexture, tuple[int, int]] = {}
+        self._textures: dict[RenderTexture, tuple[int, int]] = {}
         """OpenGL bindcode & mipmap count for each texture."""
         self._images: dict[str, list[bgl.Buffer]] = {}
         """Data buffer for each mipmap of each image (original included)."""
-        self._usedTextures: set[GLSLTexture] = set()
+        self._usedTextures: set[RenderTexture] = set()
         """Set of textures bound since the last removeUnused() call."""
 
     def _getImage(self, img: bpy.types.Image):
@@ -667,7 +680,7 @@ class BglTextureManager(TextureManager):
             mmPxBuffer = bgl.Buffer(bgl.GL_FLOAT, len(mmPx), mmPx)
             pxBuffers.append(mmPxBuffer)
 
-    def _getTexture(self, tex: GLSLTexture):
+    def _getTexture(self, tex: RenderTexture):
         """Get the bindcode and mipmap count for a texture, updating if nonexistent."""
         try:
             return self._textures[tex]
@@ -675,7 +688,7 @@ class BglTextureManager(TextureManager):
             self.updateTexture(tex)
             return self._textures[tex]
 
-    def updateTexture(self, tex: GLSLTexture):
+    def updateTexture(self, tex: RenderTexture):
         if not tex.hasImg:
             return
         img = bpy.data.images[tex.imgName]
@@ -712,7 +725,7 @@ class BglTextureManager(TextureManager):
         bindcodes = [bindcode for (bindcode, numMipmaps) in self._textures.values()]
         deleteBglTextures(bindcodes)
 
-    def bindTexture(self, texture: GLSLTexture):
+    def bindTexture(self, texture: RenderTexture):
         """Bind a texture in the OpenGL state."""
         self._usedTextures.add(texture)
         bindcode, mipmapLevels = self._getTexture(texture)
@@ -729,11 +742,11 @@ class PreviewTextureManager(TextureManager):
 
     def __init__(self):
         super().__init__()
-        self._textures: dict[GLSLTexture, gpu.types.GPUTexture] = {}
+        self._textures: dict[RenderTexture, gpu.types.GPUTexture] = {}
         """GPUTexture for each texture."""
         self._images: dict[str, gpu.types.Buffer] = {}
         """GPU data buffer for each image."""
-        self._usedTextures: set[GLSLTexture] = set()
+        self._usedTextures: set[RenderTexture] = set()
         """Set of textures bound since the last removeUnused() call."""
 
     def _getImage(self, img: bpy.types.Image):
@@ -752,7 +765,7 @@ class PreviewTextureManager(TextureManager):
         flattened = adjusted.flatten()
         self._images[img.name] = gpu.types.Buffer('FLOAT', len(flattened), flattened)
 
-    def getTexture(self, tex: GLSLTexture):
+    def getTexture(self, tex: RenderTexture):
         """Get the GPUTexture corresponding to a texture, updating if nonexistent."""
         self._usedTextures.add(tex)
         try:
@@ -761,7 +774,7 @@ class PreviewTextureManager(TextureManager):
             self.updateTexture(tex)
             return self._textures[tex]
 
-    def updateTexture(self, tex: GLSLTexture):
+    def updateTexture(self, tex: RenderTexture):
         if not tex.hasImg:
             return
         img: bpy.types.Image = bpy.data.images[tex.imgName]
@@ -780,9 +793,9 @@ class PreviewTextureManager(TextureManager):
 
     def removeUnused(self):
         self._textures = {
-            glslTex: gpuTex
-            for glslTex, gpuTex in self._textures.items()
-            if glslTex in self._usedTextures
+            renderTex: gpuTex
+            for renderTex, gpuTex in self._textures.items()
+            if renderTex in self._usedTextures
         }
         self._usedTextures.clear()
 
@@ -795,7 +808,7 @@ class BrresRenderer(ABC, Generic[TextureManagerT]):
 
     def __init__(self):
         self.shader: gpu.types.GPUShader = None
-        self.materials: dict[str, GLSLMaterialUpdaterWithUBO] = {}
+        self.materials: dict[str, RenderMaterialUpdaterWithUBO] = {}
         self.objects: dict[str, ObjectInfo] = {}
         self._textureManager: TextureManagerT = None
 
@@ -804,9 +817,9 @@ class BrresRenderer(ABC, Generic[TextureManagerT]):
         """Compile & return the main BRRES shader."""
         shaderInfo = gpu.types.GPUShaderCreateInfo()
         # uniforms
-        shaderInfo.typedef_source("".join(s.getSource() for s in GLSL_STRUCTS))
-        shaderInfo.uniform_buf(1, GLSLMaterial.getName(), "material")
-        shaderInfo.uniform_buf(2, GLSLMesh.getName(), "mesh")
+        shaderInfo.typedef_source("".join(s.getSource() for s in RENDER_STRUCTS))
+        shaderInfo.uniform_buf(1, RenderMaterial.getName(), "material")
+        shaderInfo.uniform_buf(2, RenderMesh.getName(), "mesh")
         shaderInfo.push_constant('MAT4', "modelViewProjectionMtx")
         shaderInfo.push_constant('MAT3', "normalMtx")
         shaderInfo.push_constant('BOOL', "forceOpaque")
@@ -875,7 +888,7 @@ class BrresRenderer(ABC, Generic[TextureManagerT]):
         return drawCalls
 
     def _getMaterial(self, mat: bpy.types.Material):
-        """Get the GLSLMaterial corresponding to a Blender material, updating if nonexistent."""
+        """Get the RenderMaterial for a Blender material, updating if nonexistent."""
         try:
             return self.materials[mat.name]
         except KeyError:
@@ -883,9 +896,9 @@ class BrresRenderer(ABC, Generic[TextureManagerT]):
             return self.materials[mat.name]
 
     def _updateMaterial(self, mat: bpy.types.Material):
-        """Update the GLSLMaterial corresponding to a Blender material, creating if nonexistent."""
+        """Update the RenderMaterial for a Blender material, creating if nonexistent."""
         if mat.name not in self.materials:
-            self.materials[mat.name] = GLSLMaterialUpdaterWithUBO()
+            self.materials[mat.name] = RenderMaterialUpdaterWithUBO()
         renderMat = self.materials[mat.name]
         renderMat.update(mat)
         for tex in renderMat.mat.textures:
@@ -1060,7 +1073,7 @@ class BrresRenderer(ABC, Generic[TextureManagerT]):
 
     @abstractmethod
     def processDrawCall(self, viewMtx: Matrix, projectionMtx: Matrix, objInfo: ObjectInfo,
-                        matInfo: GLSLMaterialUpdaterWithUBO, batch: gpu.types.GPUBatch):
+                        matInfo: RenderMaterialUpdaterWithUBO, batch: gpu.types.GPUBatch):
         """Draw something represented by a "draw call" (object/material/batch tuple)."""
 
     @abstractmethod
@@ -1099,7 +1112,7 @@ class BrresBglRenderer(BrresRenderer[BglTextureManager]):
         bgl.glStencilOp(bgl.GL_REPLACE, bgl.GL_REPLACE, bgl.GL_REPLACE)
 
     def processDrawCall(self, viewMtx: Matrix, projectionMtx: Matrix, objInfo: ObjectInfo,
-                        matInfo: GLSLMaterialUpdaterWithUBO, batch: gpu.types.GPUBatch):
+                        matInfo: RenderMaterialUpdaterWithUBO, batch: gpu.types.GPUBatch):
         mvMtx = viewMtx @ objInfo.matrix
         self.shader.uniform_bool("isConstAlphaWrite", [False])
         self.shader.uniform_float("modelViewProjectionMtx", projectionMtx @ mvMtx)
@@ -1152,7 +1165,7 @@ class BrresBglRenderer(BrresRenderer[BglTextureManager]):
                 else:
                     bgl.glDisable(bgl.GL_COLOR_LOGIC_OP)
         else:
-            self.shader.uniform_block("material", GLSLMaterialUpdaterWithUBO.EMPTY_UBO)
+            self.shader.uniform_block("material", RenderMaterialUpdaterWithUBO.EMPTY_UBO)
             bgl.glDisable(bgl.GL_STENCIL_TEST)
             bgl.glDisable(bgl.GL_BLEND)
             bgl.glDisable(bgl.GL_COLOR_LOGIC_OP)
@@ -1227,7 +1240,7 @@ class BrresPreviewRenderer(BrresRenderer[PreviewTextureManager]):
         self.shader.uniform_bool("forceOpaque", [True])
 
     def processDrawCall(self, viewMtx: Matrix, projectionMtx: Matrix, objInfo: ObjectInfo,
-                        matInfo: GLSLMaterialUpdaterWithUBO, batch: gpu.types.GPUBatch):
+                        matInfo: RenderMaterialUpdaterWithUBO, batch: gpu.types.GPUBatch):
         mvMtx = viewMtx @ objInfo.matrix
         self.shader.uniform_bool("isConstAlphaWrite", [False])
         self.shader.uniform_float("modelViewProjectionMtx", projectionMtx @ mvMtx)
@@ -1240,7 +1253,7 @@ class BrresPreviewRenderer(BrresRenderer[PreviewTextureManager]):
                 if tex.hasImg:
                     self.shader.uniform_sampler(f"image{i}", self._textureManager.getTexture(tex))
         else:
-            self.shader.uniform_block("material", GLSLMaterialUpdaterWithUBO.EMPTY_UBO)
+            self.shader.uniform_block("material", RenderMaterialUpdaterWithUBO.EMPTY_UBO)
         # draw
         batch.draw(self.shader)
 
@@ -1248,7 +1261,7 @@ class BrresPreviewRenderer(BrresRenderer[PreviewTextureManager]):
         gpu.state.depth_test_set('NONE')
 
 
-class BRRESRenderEngine(bpy.types.RenderEngine):
+class BerryBushRenderEngine(bpy.types.RenderEngine):
     bl_idname = "BERRYBUSH"
     bl_label = "BerryBush"
     bl_use_preview = True
