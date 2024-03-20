@@ -485,12 +485,12 @@ class RenderMaterialUpdater:
     EMPTY_UBO = gpu.types.GPUUniformBuf(_EMPTY_UBO_BYTES)
 
     def __init__(self):
-        self.mat = RenderMaterial()
+        self.renderMat = RenderMaterial()
 
     def updateAnimation(self, mat: bpy.types.Material):
         """Update this material's animatable settings based on a Blender material."""
         brres = mat.brres
-        renderMat = self.mat
+        renderMat = self.renderMat
         # color registers
         renderMat.setColorRegs(brres.colorRegs)
         for lc, rlc in zip(brres.lightChans, renderMat.lightChans):
@@ -511,7 +511,7 @@ class RenderMaterialUpdater:
 
     def update(self, mat: bpy.types.Material):
         """Update this material based on a Blender material."""
-        renderMat = self.mat
+        renderMat = self.renderMat
         brres = mat.brres
         renderMat.name = mat.name
         # tev settings
@@ -584,7 +584,7 @@ class RenderMaterialUpdater:
         renderMat.enableDepthUpdate = depthSettings.enableDepthUpdate
 
 
-class RenderMaterialUpdaterWithUBO(RenderMaterialUpdater):
+class RenderMaterialWithUbo(RenderMaterialUpdater):
     """Updates a RenderMaterial and keeps track of a UBO for it."""
 
     _EMPTY_UBO_BYTES = b"\x00" * RenderMaterial.getSize()
@@ -597,16 +597,12 @@ class RenderMaterialUpdaterWithUBO(RenderMaterialUpdater):
     def updateAnimation(self, mat: bpy.types.Material):
         """Update this material info's animatable settings based on a Blender material."""
         super().updateAnimation(mat)
-        self.ubo.update(self.mat.pack())
+        self.ubo.update(self.renderMat.pack())
 
     def update(self, mat: bpy.types.Material):
         """Update this material info based on a Blender material."""
         super().update(mat)
-        self.ubo.update(self.mat.pack())
-
-
-class MaterialManager:
-    pass
+        self.ubo.update(self.renderMat.pack())
 
 
 class ObjectInfo:
@@ -614,12 +610,97 @@ class ObjectInfo:
     _EMPTY_UBO_BYTES = b"\x00" * RenderMesh.getSize()
 
     def __init__(self):
-        self.batches: dict[RenderMaterialUpdaterWithUBO, gpu.types.GPUBatch] = {}
+        self.batches: dict[RenderMaterialWithUbo, gpu.types.GPUBatch] = {}
         self.drawPrio = 0
         self.matrix: Matrix = Matrix.Identity(4)
         self.usedAttrs: set[str] = set()
         self.mesh = RenderMesh()
         self.ubo = gpu.types.GPUUniformBuf(self._EMPTY_UBO_BYTES)
+
+
+class MaterialManager(ABC, Generic[TextureManagerT]):
+
+    @abstractmethod
+    def getMaterial(self, mat: bpy.types.Material) -> RenderMaterialWithUbo:
+        """Get the RenderMaterialWithUbo for a Blender material, updating if nonexistent."""
+
+    @abstractmethod
+    def updateMaterial(self, mat: bpy.types.Material):
+        """Update the RenderMaterialWithUbo for a Blender material, creating if nonexistent."""
+
+    @abstractmethod
+    def updateMaterialAnimation(self, mat: bpy.types.Material):
+        """Update anim data for the RenderMaterialWithUbo of a Blender material if it exists."""
+
+    @abstractmethod
+    def popInvalidMaterials(self) -> list[RenderMaterialWithUbo]:
+        """Remove & return all RenderMaterialWithUbos that lack associated Blender materials."""
+
+    @abstractmethod
+    def updateMaterialsUsingTevConfig(self, tevId: str):
+        """Update all RenderMaterialWithUbos that use some TEV config (referenced by UUID)."""
+
+    @abstractmethod
+    def updateMaterialsUsingInvalidTevIds(self, validIds: set[str]):
+        """Update all RenderMaterialWithUbos that use a TEV config not found in the given set."""
+
+
+class StandardMaterialManager(MaterialManager[TextureManagerT]):
+
+    def __init__(self, textureManager: TextureManagerT, assumeOpaqueMats: bool = False):
+        self._textureManager = textureManager
+        self._materials: dict[str, RenderMaterialWithUbo] = {}
+        """RenderMaterialWithUbo for each material."""
+        self._assumeOpaqueMats = assumeOpaqueMats
+        """If enabled, all materials w/o blending have constant alpha enabled & set to 1."""
+
+    def getMaterial(self, mat: bpy.types.Material) -> RenderMaterialWithUbo:
+        try:
+            return self._materials[mat.name]
+        except KeyError:
+            self.updateMaterial(mat)
+            return self._materials[mat.name]
+
+    def updateMaterial(self, mat: bpy.types.Material):
+        if mat.name not in self._materials:
+            self._materials[mat.name] = RenderMaterialWithUbo()
+        renderMatWithUbo = self._materials[mat.name]
+        renderMatWithUbo.update(mat)
+        renderMat = renderMatWithUbo.renderMat
+        for tex in renderMat.textures:
+            self._textureManager.updateTexture(tex)
+        if self._assumeOpaqueMats and not renderMat.enableBlend:
+            renderMat.enableConstAlpha = True
+            renderMat.constAlpha = 1
+
+    def updateMaterialAnimation(self, mat: bpy.types.Material):
+        try:
+            self._materials[mat.name].updateAnimation(mat)
+        except KeyError:
+            pass
+
+    def popInvalidMaterials(self):
+        invalid: list[RenderMaterialWithUbo] = []
+        for blendMatName in tuple(self._materials): # tuple() so removal doesn't mess w/ iteration
+            if blendMatName not in bpy.data.materials:
+                invalid.append(self._materials.pop(blendMatName))
+        return invalid
+
+    def updateMaterialsUsingTevConfig(self, tevId: str):
+        for blendMatName, renderMat in self._materials.items():
+            blendMat = bpy.data.materials[blendMatName]
+            if blendMat.brres.tevID == tevId:
+                renderMat.update(blendMat)
+
+    def updateMaterialsUsingInvalidTevIds(self, validIds: set[str]):
+        for blendMatName, renderMat in self._materials.items():
+            blendMat = bpy.data.materials[blendMatName]
+            if blendMat.brres.tevID not in validIds:
+                renderMat.update(blendMat)
+
+
+class ObjectManager(ABC):
+    pass
 
 
 class TextureManager(ABC):
@@ -808,9 +889,9 @@ class BrresRenderer(ABC, Generic[TextureManagerT]):
 
     def __init__(self):
         self.shader: gpu.types.GPUShader = None
-        self.materials: dict[str, RenderMaterialUpdaterWithUBO] = {}
         self.objects: dict[str, ObjectInfo] = {}
         self._textureManager: TextureManagerT = None
+        self._materialManager: MaterialManager[TextureManagerT] = None
 
     @classmethod
     def _compileShader(cls) -> gpu.types.GPUShader:
@@ -881,28 +962,11 @@ class BrresRenderer(ABC, Generic[TextureManagerT]):
         objects = reversed(self.objects.values())
         drawCalls = [(o, m, b) for o in objects for m, b in o.batches.items()]
         drawCalls.sort(key=lambda v: (
-            v[1] and v[1].mat.isXlu,
+            v[1] and v[1].renderMat.isXlu,
             v[0].drawPrio,
-            v[1].mat.name if v[1] else ""
+            v[1].renderMat.name if v[1] else ""
         ))
         return drawCalls
-
-    def _getMaterial(self, mat: bpy.types.Material):
-        """Get the RenderMaterial for a Blender material, updating if nonexistent."""
-        try:
-            return self.materials[mat.name]
-        except KeyError:
-            self._updateMaterial(mat)
-            return self.materials[mat.name]
-
-    def _updateMaterial(self, mat: bpy.types.Material):
-        """Update the RenderMaterial for a Blender material, creating if nonexistent."""
-        if mat.name not in self.materials:
-            self.materials[mat.name] = RenderMaterialUpdaterWithUBO()
-        renderMat = self.materials[mat.name]
-        renderMat.update(mat)
-        for tex in renderMat.mat.textures:
-            self._textureManager.updateTexture(tex)
 
     def _getBrresLayerNames(self, mesh: bpy.types.Mesh) -> tuple[list[str], list[str]]:
         """Get the BRRES color & UV attribute names for a mesh."""
@@ -959,9 +1023,9 @@ class BrresRenderer(ABC, Generic[TextureManagerT]):
         if None in matSlotIdcs:
             noMat = np.logical_or(noMat, np.isin(noMat, matSlotIdcs.pop(None)))
         for mat, idcs in matSlotIdcs.items():
-            matInfo = self._getMaterial(mat)
+            renderMatWithUbo = self._materialManager.getMaterial(mat)
             idcs = loopIdcs[np.isin(matLoopIdcs, idcs)]
-            objInfo.batches[matInfo] = self._genBatch('TRIS', attrs, idcs)
+            objInfo.batches[renderMatWithUbo] = self._genBatch('TRIS', attrs, idcs)
         if np.any(noMat):
             idcs = loopIdcs[noMat]
             objInfo.batches[None] = self._genBatch('TRIS', attrs, idcs)
@@ -1004,21 +1068,18 @@ class BrresRenderer(ABC, Generic[TextureManagerT]):
         self.objects = {n: info for n, info in self.objects.items() if n in names}
         isMatUpdate = depsgraph.id_type_updated('MATERIAL')
         if isMatUpdate:
-            for matName, matInfo in tuple(self.materials.items()):
-                # if material has been deleted (or renamed), remove it from renderer
-                # additionally, regenerate any objects that used it
-                if matName not in bpy.data.materials:
-                    del self.materials[matName]
-                    for objName, objInfo in self.objects.items():
-                        if matInfo in objInfo.batches:
-                            self._updateMeshCache(depsgraph.objects[objName], depsgraph)
+            # if material has been deleted (or renamed), remove it & regenerate objects that used it
+            for renderMatWithUbo in self._materialManager.popInvalidMaterials():
+                for objName, objInfo in self.objects.items():
+                    if renderMatWithUbo in objInfo.batches:
+                        self._updateMeshCache(depsgraph.objects[objName], depsgraph)
         # add new stuff
         for obj in visObjs:
             if obj.name not in self.objects:
                 self._updateMeshCache(obj, depsgraph)
         # update modified stuff
         tevConfigs = context.scene.brres.tevConfigs if context else ()
-        tevIDs = {t.uuid for t in tevConfigs} | {""} # for tev config deletion detection
+        validTevIds = {t.uuid for t in tevConfigs} | {""} # for tev config deletion detection
         for update in depsgraph.updates:
             updateId = update.id
             if isinstance(updateId, bpy.types.Object):
@@ -1031,9 +1092,9 @@ class BrresRenderer(ABC, Generic[TextureManagerT]):
             elif isinstance(updateId, bpy.types.Material):
                 if update.is_updated_shading and update.is_updated_geometry:
                     # this indicates some material property was changed by the user (not animation)
-                    self._updateMaterial(updateId)
-                elif updateId.name in self.materials:
-                    self.materials[updateId.name].updateAnimation(updateId)
+                    self._materialManager.updateMaterial(updateId)
+                else:
+                    self._materialManager.updateMaterialAnimation(updateId)
             elif isinstance(updateId, bpy.types.Image):
                 # material updates can sometimes trigger image updates for some reason,
                 # so make sure this is an actual image update
@@ -1042,21 +1103,15 @@ class BrresRenderer(ABC, Generic[TextureManagerT]):
             elif isinstance(updateId, bpy.types.Scene) and update.is_updated_geometry:
                 if update.is_updated_geometry:
                     # this implies a tev update, so update all materials that use the active tev
-                    # it could also mean a tev was deleted, so also
-                    # update materials w/ invalid tev ids
+                    # it could also mean a tev was deleted, so also update mats w/ invalid tev ids
                     try:
                         activeTev = context.active_object.active_material.brres.tevID
-                        for matName in self.materials:
-                            mat = bpy.data.materials[matName]
-                            if mat.brres.tevID == activeTev:
-                                self._updateMaterial(mat)
-                            elif mat.brres.tevID not in tevIDs:
-                                # this means the material's tev was recently deleted, so reset uuid
-                                # (proputils treats invalid id refs and empty refs the same, but
-                                # this makes it easy to figure out which materials to update when
-                                # configs are deleted, as otherwise all mats w/ no tev would update)
-                                mat.brres.tevID = ""
-                                self._updateMaterial(mat)
+                        self._materialManager.updateMaterialsUsingTevConfig(activeTev)
+                        # if a tev id isn't in the set, it means the material's tev was recently
+                        # deleted, so reset uuid (proputils treats invalid id refs and empty refs
+                        # the same, but this allows figuring out which materials to update when
+                        # configs are deleted)
+                        self._materialManager.updateMaterialsUsingInvalidTevIds(validTevIds)
                     except AttributeError:
                         # no active material, so don't worry about it
                         # (or no context provided, which means this is a final render, and in that
@@ -1066,14 +1121,14 @@ class BrresRenderer(ABC, Generic[TextureManagerT]):
     def draw(self, projectionMtx: Matrix, viewMtx: Matrix):
         """Draw the current BRRES scene to the active framebuffer."""
         self.preDraw()
-        for (objInfo, matInfo, batch) in self._getDrawCalls():
-            self.processDrawCall(viewMtx, projectionMtx, objInfo, matInfo, batch)
+        for (objInfo, renderMatWithUbo, batch) in self._getDrawCalls():
+            self.processDrawCall(viewMtx, projectionMtx, objInfo, renderMatWithUbo, batch)
         self.postDraw()
         self._textureManager.removeUnused()
 
     @abstractmethod
     def processDrawCall(self, viewMtx: Matrix, projectionMtx: Matrix, objInfo: ObjectInfo,
-                        matInfo: RenderMaterialUpdaterWithUBO, batch: gpu.types.GPUBatch):
+                        renderMatWithUbo: RenderMaterialWithUbo, batch: gpu.types.GPUBatch):
         """Draw something represented by a "draw call" (object/material/batch tuple)."""
 
     @abstractmethod
@@ -1090,16 +1145,9 @@ class BrresBglRenderer(BrresRenderer[BglTextureManager]):
 
     def __init__(self, assumeOpaqueMats: bool, noTransparentOverwrite: bool):
         super().__init__()
-        self._assumeOpaqueMats = assumeOpaqueMats
         self._noTransparentOverwrite = noTransparentOverwrite
         self._textureManager = BglTextureManager()
-
-    def _updateMaterial(self, mat: bpy.types.Material):
-        super()._updateMaterial(mat)
-        renderMat = self.materials[mat.name].mat
-        if self._assumeOpaqueMats and not renderMat.enableBlend:
-            renderMat.enableConstAlpha = True
-            renderMat.constAlpha = 1
+        self._materialManager = StandardMaterialManager(self._textureManager, assumeOpaqueMats)
 
     def preDraw(self):
         self.shader.bind()
@@ -1112,60 +1160,60 @@ class BrresBglRenderer(BrresRenderer[BglTextureManager]):
         bgl.glStencilOp(bgl.GL_REPLACE, bgl.GL_REPLACE, bgl.GL_REPLACE)
 
     def processDrawCall(self, viewMtx: Matrix, projectionMtx: Matrix, objInfo: ObjectInfo,
-                        matInfo: RenderMaterialUpdaterWithUBO, batch: gpu.types.GPUBatch):
+                        renderMatWithUbo: RenderMaterialWithUbo, batch: gpu.types.GPUBatch):
         mvMtx = viewMtx @ objInfo.matrix
         self.shader.uniform_bool("isConstAlphaWrite", [False])
         self.shader.uniform_float("modelViewProjectionMtx", projectionMtx @ mvMtx)
         self.shader.uniform_float("normalMtx", mvMtx.to_3x3().inverted_safe().transposed())
         self.shader.uniform_block("mesh", objInfo.ubo)
         # load material data
-        if matInfo is not None:
-            self.shader.uniform_block("material", matInfo.ubo)
-            shaderMat = matInfo.mat
+        if renderMatWithUbo:
+            self.shader.uniform_block("material", renderMatWithUbo.ubo)
+            renderMat = renderMatWithUbo.renderMat
             # textures
-            for i, tex in enumerate(shaderMat.textures):
+            for i, tex in enumerate(renderMat.textures):
                 if tex.hasImg:
                     bgl.glActiveTexture(bgl.GL_TEXTURE0 + i)
                     self._textureManager.bindTexture(tex)
             # dithering
-            if shaderMat.enableDither:
+            if renderMat.enableDither:
                 bgl.glEnable(bgl.GL_DITHER)
             else:
                 bgl.glDisable(bgl.GL_DITHER)
             # culling
-            if shaderMat.enableCulling:
+            if renderMat.enableCulling:
                 bgl.glEnable(bgl.GL_CULL_FACE)
-                bgl.glCullFace(shaderMat.cullMode)
+                bgl.glCullFace(renderMat.cullMode)
             else:
                 bgl.glDisable(bgl.GL_CULL_FACE)
             # depth test
-            if shaderMat.enableDepthTest:
+            if renderMat.enableDepthTest:
                 bgl.glEnable(bgl.GL_DEPTH_TEST)
             else:
                 bgl.glDisable(bgl.GL_DEPTH_TEST)
-            bgl.glDepthFunc(shaderMat.depthFunc)
-            bgl.glDepthMask(shaderMat.enableDepthUpdate)
+            bgl.glDepthFunc(renderMat.depthFunc)
+            bgl.glDepthMask(renderMat.enableDepthUpdate)
             # blending & logic op
-            if shaderMat.enableBlend:
+            if renderMat.enableBlend:
                 bgl.glDisable(bgl.GL_COLOR_LOGIC_OP)
-                if shaderMat.blendSubtract:
+                if renderMat.blendSubtract:
                     bgl.glEnable(bgl.GL_BLEND)
                     bgl.glBlendEquation(bgl.GL_FUNC_SUBTRACT)
                     bgl.glBlendFunc(bgl.GL_ONE, bgl.GL_ONE)
                 else:
                     bgl.glEnable(bgl.GL_BLEND)
                     bgl.glBlendEquation(bgl.GL_FUNC_ADD)
-                    bgl.glBlendFunc(shaderMat.blendSrcFac, shaderMat.blendDstFac)
+                    bgl.glBlendFunc(renderMat.blendSrcFac, renderMat.blendDstFac)
             else:
                 bgl.glDisable(bgl.GL_BLEND)
-                if shaderMat.enableBlendLogic:
+                if renderMat.enableBlendLogic:
                     bgl.glDisable(bgl.GL_BLEND)
                     bgl.glEnable(bgl.GL_COLOR_LOGIC_OP)
-                    bgl.glLogicOp(shaderMat.blendLogicOp)
+                    bgl.glLogicOp(renderMat.blendLogicOp)
                 else:
                     bgl.glDisable(bgl.GL_COLOR_LOGIC_OP)
         else:
-            self.shader.uniform_block("material", RenderMaterialUpdaterWithUBO.EMPTY_UBO)
+            self.shader.uniform_block("material", RenderMaterialWithUbo.EMPTY_UBO)
             bgl.glDisable(bgl.GL_STENCIL_TEST)
             bgl.glDisable(bgl.GL_BLEND)
             bgl.glDisable(bgl.GL_COLOR_LOGIC_OP)
@@ -1184,7 +1232,7 @@ class BrresBglRenderer(BrresRenderer[BglTextureManager]):
             # values anyway (and the "assume opaque materials" setting & constant alpha material
             # setting take care of that in most cases where it does happen), so i can't really
             # think of a use case either way
-            # tldr: shaderMat.enableBlend isn't taken into acccount rn, but that's arbitrary
+            # tldr: renderMat.enableBlend isn't taken into acccount rn, but that's arbitrary
 
             # rgb
             bgl.glColorMask(True, True, True, False)
@@ -1199,7 +1247,7 @@ class BrresBglRenderer(BrresRenderer[BglTextureManager]):
         else:
             batch.draw(self.shader)
         # write constant alpha if enabled (must be done after blending, hence 2 draw calls)
-        if matInfo and matInfo.mat.enableConstAlpha:
+        if renderMatWithUbo and renderMatWithUbo.renderMat.enableConstAlpha:
             bgl.glDisable(bgl.GL_BLEND)
             bgl.glDisable(bgl.GL_COLOR_LOGIC_OP)
             bgl.glDisable(bgl.GL_DITHER)
@@ -1228,6 +1276,7 @@ class BrresPreviewRenderer(BrresRenderer[PreviewTextureManager]):
     def __init__(self):
         super().__init__()
         self._textureManager = PreviewTextureManager()
+        self._materialManager = StandardMaterialManager(self._textureManager)
 
     def _getBrresLayerNames(self, mesh: bpy.types.Mesh):
         return (["Col"] * gx.MAX_CLR_ATTRS, ["UVMap"] * gx.MAX_UV_ATTRS)
@@ -1240,20 +1289,20 @@ class BrresPreviewRenderer(BrresRenderer[PreviewTextureManager]):
         self.shader.uniform_bool("forceOpaque", [True])
 
     def processDrawCall(self, viewMtx: Matrix, projectionMtx: Matrix, objInfo: ObjectInfo,
-                        matInfo: RenderMaterialUpdaterWithUBO, batch: gpu.types.GPUBatch):
+                        renderMatWithUbo: RenderMaterialWithUbo, batch: gpu.types.GPUBatch):
         mvMtx = viewMtx @ objInfo.matrix
         self.shader.uniform_bool("isConstAlphaWrite", [False])
         self.shader.uniform_float("modelViewProjectionMtx", projectionMtx @ mvMtx)
         self.shader.uniform_float("normalMtx", mvMtx.to_3x3().inverted_safe().transposed())
         self.shader.uniform_block("mesh", objInfo.ubo)
         # load material data
-        if matInfo:
-            self.shader.uniform_block("material", matInfo.ubo)
-            for i, tex in enumerate(matInfo.mat.textures):
+        if renderMatWithUbo:
+            self.shader.uniform_block("material", renderMatWithUbo.ubo)
+            for i, tex in enumerate(renderMatWithUbo.renderMat.textures):
                 if tex.hasImg:
                     self.shader.uniform_sampler(f"image{i}", self._textureManager.getTexture(tex))
         else:
-            self.shader.uniform_block("material", RenderMaterialUpdaterWithUBO.EMPTY_UBO)
+            self.shader.uniform_block("material", RenderMaterialWithUbo.EMPTY_UBO)
         # draw
         batch.draw(self.shader)
 
