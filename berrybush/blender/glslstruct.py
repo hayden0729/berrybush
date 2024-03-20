@@ -3,7 +3,7 @@ from abc import abstractmethod
 from dataclasses import dataclass
 from functools import cache
 import struct
-from typing import TYPE_CHECKING
+from typing import Generic, Iterator, TypeVar, TYPE_CHECKING
 # internal imports
 from ..wii.binaryutils import pad
 # special typing imports
@@ -13,7 +13,11 @@ else:
     Self = object
 
 
-class GLSLType():
+T = TypeVar("T", bound="GLSLType")
+B = TypeVar("B", bound="GLSLBasicType")
+
+
+class GLSLType(Generic[T]):
     """GLSL type definition.
 
     Use in custom structs by type-hinting members with type instances that define their parameters
@@ -180,9 +184,9 @@ class GLSLDouble(GLSLFloatType):
 
 
 @dataclass(frozen=True)
-class GLSLVec(GLSLType):
+class GLSLVec(GLSLType[B]):
 
-    dtype: type[GLSLBasicType]
+    dtype: type[B]
     length: int
 
     @classmethod
@@ -208,10 +212,13 @@ class GLSLVec(GLSLType):
 
 
 @dataclass(frozen=True)
-class GLSLArr(GLSLType):
+class GLSLArr(GLSLType[T]):
 
-    dtype: GLSLType
+    dtype: type[T] | T
     length: int
+
+    def __iter__(self) -> Iterator[T]:
+        pass
 
     @classmethod
     def getDefault(cls):

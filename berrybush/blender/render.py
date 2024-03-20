@@ -1,8 +1,11 @@
 # standard imports
+from abc import ABC, abstractmethod
 import pathlib
+from typing import Generic, TypeVar
 # 3rd party imports
 import bpy
 import bgl # this is deprecated, but has a lot of functionality that gpu still lacks
+from bpy.types import Image
 import gpu
 from gpu_extras.batch import batch_for_shader
 from mathutils import Matrix
@@ -13,18 +16,20 @@ from .common import ( # pylint: disable=unused-import
     drawColumnSeparator, enumVal, foreachGet,
     getLoopVertIdcs, getLoopFaceIdcs, getFaceMatIdcs, getLayerData
 )
-from .brresexport import IMG_FMTS, padImgData
 from .glslstruct import GLSLBool, GLSLInt, GLSLFloat, GLSLVec, GLSLArr, GLSLMat, GLSLStruct
 from .material import ColorRegSettings, IndTransform, LightChannelSettings
 from .texture import TexSettings, TextureTransform
 from .tev import TevStageSettings
-from ..wii import gx, transform as tf
+from ..wii import gx, tex0, transform as tf
 
 
 # CURRENT SHADER APPROACH (ubershader vs dynamic):
 # one vertex shader & fragment shader compiled for everything, taking material info through a ubo
 # this has good info & links about this issue:
 # https://community.khronos.org/t/ubershader-and-branching-cost/108571
+
+
+TextureManagerT = TypeVar("TextureManagerT", bound="TextureManager")
 
 
 TEX_WRAPS = {
@@ -97,7 +102,7 @@ DEPTH_FUNCS = {
 }
 
 
-def printUpdateInfo(update: bpy.types.DepsgraphUpdate):
+def printDepsgraphUpdateInfo(update: bpy.types.DepsgraphUpdate):
     """Print info about a depsgraph update."""
     print("-------- DEPSGRAPH UPDATE --------\n"
         f"Updated ID:        {update.id},\n"
@@ -127,8 +132,15 @@ def debugDraw():
     batch.draw(shader)
 
 
-def getLoopAttrs(mesh: bpy.types.Mesh, clrs: list[str] = None, uvs: list[str] = None):
-    """Get a dict for a mesh with its loops' BRRES attributes based on attribute layer names."""
+def deleteBglTextures(bindcodes: list[int]):
+    if bindcodes:
+        n = len(bindcodes)
+        bgl.glDeleteTextures(n, bgl.Buffer(bgl.GL_INT, n, bindcodes))
+
+
+def getLoopAttributeData(mesh: bpy.types.Mesh,
+                         colorLayerNames: list[str] = None, uvLayerNames: list[str] = None):
+    """Get a dict mapping a mesh's BRRES attribute layers' names to their loop data."""
     loopAttrs: dict[str, np.ndarray] = {}
     loopVertIdcs = getLoopVertIdcs(mesh)
     loopFaceIdcs: np.ndarray = None # only calculated when necessary
@@ -139,15 +151,15 @@ def getLoopAttrs(mesh: bpy.types.Mesh, clrs: list[str] = None, uvs: list[str] = 
         mesh.calc_normals_split()
     loopAttrs["normal"] = foreachGet(mesh.loops, "normal", 3)
     # colors & uvs
-    clrs = clrs if clrs is not None else [""] * gx.MAX_CLR_ATTRS
-    uvs = uvs if uvs is not None else [""] * gx.MAX_UV_ATTRS
-    clrData = getLayerData(mesh, clrs, unique=False)
-    uvData = getLayerData(mesh, uvs, isUV=True, unique=False)
+    colorLayerNames = colorLayerNames if colorLayerNames else [""] * gx.MAX_CLR_ATTRS
+    uvLayerNames = uvLayerNames if uvLayerNames else [""] * gx.MAX_UV_ATTRS
+    clrData = getLayerData(mesh, colorLayerNames, unique=False)
+    uvData = getLayerData(mesh, uvLayerNames, isUV=True, unique=False)
     attrTypeInfo = (("color", "uv"), (gx.ClrAttr, gx.UVAttr), (clrData, uvData))
     for aTypeName, aType, aLayerData in zip(*attrTypeInfo):
         for i, (layer, layerData, layerIdcs) in enumerate(aLayerData):
             # format data & add to dict
-            if layer is not None:
+            if layer:
                 # get data in per-loop domain, regardless of original domain
                 try:
                     if layer.domain == 'POINT':
@@ -162,6 +174,59 @@ def getLoopAttrs(mesh: bpy.types.Mesh, clrs: list[str] = None, uvs: list[str] = 
                     pass # this is a uv layer, which implicity has per-loop (corner) domain
                 loopAttrs[f"{aTypeName}{i}"] = aType.pad(layerData)
     return loopAttrs
+
+
+class BlendImageExtractor:
+
+    _IMG_FMTS: dict[str, type[tex0.ImageFormat]] = {
+        'I4': tex0.I4,
+        'I8': tex0.I8,
+        'IA4': tex0.IA4,
+        'IA8': tex0.IA8,
+        'RGB565': tex0.RGB565,
+        'RGB5A3': tex0.RGB5A3,
+        'RGBA8': tex0.RGBA8,
+        'CMPR': tex0.CMPR
+    }
+
+    @classmethod
+    def getFormat(cls, img: bpy.types.Image):
+        return cls._IMG_FMTS[img.brres.fmt]
+
+    @classmethod
+    def getDims(cls, img: bpy.types.Image, setLargeToBlack = False):
+        """Get the dimensions (for BRRES conversion) of a Blender image."""
+        dims = np.array(img.size, dtype=np.integer)
+        dims[dims == 0] = 1
+        if setLargeToBlack and dims.max() > gx.MAX_TEXTURE_SIZE:
+            dims[:] = 1
+        return dims
+
+    @classmethod
+    def getRgba(cls, img: bpy.types.Image, setLargeToBlack = False):
+        """Extract RGBA image data (guaranteed valid for BRRES conversion) from a Blender image.
+        
+        Optionally, set an image to 1x1 black if it exceeds the maximum Wii texture size.
+        """
+        if not img:
+            return np.zeros((1, 1, 4), dtype=np.float32)
+        dims = img.size
+        px = np.array(img.pixels, dtype=np.float32).reshape(dims[1], dims[0], img.channels)
+        # pad all image dimensions to at least 1 (render result is 0x0 if unset) & channels to 4
+        px = np.pad(px, ((0, dims[1] == 0), (0, dims[0] == 0), (0, 4 - img.channels)))
+        if setLargeToBlack and max(dims) > gx.MAX_TEXTURE_SIZE:
+            px = px[:1, :1] * 0
+        return px
+
+    @classmethod
+    def getRgbaWithDims(cls, img: bpy.types.Image, dims: tuple[int, int]):
+        """Extract pixels from a Blender image, cropped or padded to the specified dimensions."""
+        output = np.zeros((dims[1], dims[0], 4), dtype=np.float32)
+        if not img:
+            return output
+        # crop & pad, all at once
+        output[:img.size[1], :img.size[0]] = cls.getRgba(img)[:dims[1], :dims[0]]
+        return output
 
 
 class GLSLTevStageSels(GLSLStruct):
@@ -263,16 +328,6 @@ class GLSLTexture(GLSLStruct):
         self._r = 0
         self._t = (0, 0)
 
-    def bind(self, bindcode: int, mipmapLevels: int):
-        """Bind this texture in OpenGL."""
-        bgl.glBindTexture(bgl.GL_TEXTURE_2D, bindcode)
-        bgl.glTexParameteri(bgl.GL_TEXTURE_2D, bgl.GL_TEXTURE_WRAP_S, self.wrap[0])
-        bgl.glTexParameteri(bgl.GL_TEXTURE_2D, bgl.GL_TEXTURE_WRAP_T, self.wrap[1])
-        bgl.glTexParameteri(bgl.GL_TEXTURE_2D, bgl.GL_TEXTURE_MIN_FILTER, self.filter[0])
-        bgl.glTexParameteri(bgl.GL_TEXTURE_2D, bgl.GL_TEXTURE_MAG_FILTER, self.filter[1])
-        bgl.glTexParameterf(bgl.GL_TEXTURE_2D, bgl.GL_TEXTURE_LOD_BIAS, self.lodBias)
-        bgl.glTexParameteri(bgl.GL_TEXTURE_2D, bgl.GL_TEXTURE_MAX_LEVEL, mipmapLevels)
-
     def setMtx(self, texTf: TextureTransform, tfGen: tf.MtxGenerator):
         """Set this texture's transformation matrix."""
         # TODO: implement similar caching for indirect matrices
@@ -298,7 +353,7 @@ class GLSLTexture(GLSLStruct):
         # transform
         rTex.setMtx(tex.transform, tfGen)
         # settings
-        rTex.dims = img.size if rTex.hasImg else (0, 0)
+        rTex.dims = tuple(img.size) if rTex.hasImg else (0, 0)
         rTex.mapMode = enumVal(tex, "mapMode", callback=type(tex).coordSrcItems)
         rTex.wrap = (TEX_WRAPS[tex.wrapModeU], TEX_WRAPS[tex.wrapModeV])
         mipmapLevels = len(img.brres.mipmaps) if rTex.hasImg else 0
@@ -422,18 +477,16 @@ GLSL_STRUCTS = (
 )
 
 
-class MaterialInfo:
+class GLSLMaterialUpdater:
 
     _EMPTY_UBO_BYTES = b"\x00" * GLSLMaterial.getSize()
     EMPTY_UBO = gpu.types.GPUUniformBuf(_EMPTY_UBO_BYTES)
 
-    def __init__(self, mat: bpy.types.Material):
-        self.ubo = gpu.types.GPUUniformBuf(self._EMPTY_UBO_BYTES)
+    def __init__(self):
         self.mat = GLSLMaterial()
-        self.update(mat)
 
-    def updateAnimation(self, mat: bpy.types.Material, renderer: "MainBRRESRenderer"):
-        """Update this material info's animatable settings based on a Blender material."""
+    def updateAnimation(self, mat: bpy.types.Material):
+        """Update this material's animatable settings based on a Blender material."""
         brres = mat.brres
         rMat = self.mat
         # color registers
@@ -450,23 +503,18 @@ class MaterialInfo:
                 if img is not None:
                     rTex.hasImg = True
                     rTex.imgName = img.name
-                    if img.name not in renderer.images:
-                        renderer.updateImgCache(img)
                 else:
                     rTex.hasImg = False
         rMat.setIndMtcs(brres.indSettings.transforms, tfGen)
-        # update ubo
-        self.ubo.update(rMat.pack())
 
     def update(self, mat: bpy.types.Material):
-        """Update this material info based on a Blender material."""
-        scene = bpy.context.scene
+        """Update this material based on a Blender material."""
         rMat = self.mat
         brres = mat.brres
         rMat.name = mat.name
         # tev settings
         try:
-            tev = scene.brres.tevConfigs[brres.tevID]
+            tev = bpy.context.scene.brres.tevConfigs[brres.tevID]
             rMat.colorSwaps = tuple(tuple(enumVal(s, c) for c in "rgba") for s in tev.colorSwaps)
             enabledStages = tuple(stage for stage in tev.stages if not stage.hide)
             rMat.numStages = len(enabledStages)
@@ -514,20 +562,38 @@ class MaterialInfo:
         rMat.alphaTestComps = tuple(enumVal(alphaSettings, f"testComp{i + 1}") for i in range(2))
         rMat.alphaTestLogic = enumVal(alphaSettings, "testLogic")
         rMat.alphaTestEnable = True
-        assumeOpaqueMats = scene.render.film_transparent and scene.brres.renderAssumeOpaqueMats
-        if assumeOpaqueMats and not rMat.enableBlend:
-            rMat.enableConstAlpha = True
-            rMat.constAlpha = 1
-        else:
-            rMat.enableConstAlpha = alphaSettings.enableConstVal
-            rMat.constAlpha = alphaSettings.constVal
+        rMat.enableConstAlpha = alphaSettings.enableConstVal
+        rMat.constAlpha = alphaSettings.constVal
         # depth settings
         depthSettings = brres.depthSettings
         rMat.enableDepthTest = depthSettings.enableDepthTest
         rMat.depthFunc = DEPTH_FUNCS[depthSettings.depthFunc]
         rMat.enableDepthUpdate = depthSettings.enableDepthUpdate
-        # update ubo
-        self.ubo.update(rMat.pack())
+
+
+class GLSLMaterialUpdaterWithUBO(GLSLMaterialUpdater):
+    """Updates a GLSLMaterial and keeps track of a UBO for it."""
+
+    _EMPTY_UBO_BYTES = b"\x00" * GLSLMaterial.getSize()
+    EMPTY_UBO = gpu.types.GPUUniformBuf(_EMPTY_UBO_BYTES)
+
+    def __init__(self):
+        self.ubo = gpu.types.GPUUniformBuf(self._EMPTY_UBO_BYTES)
+        super().__init__()
+
+    def updateAnimation(self, mat: bpy.types.Material):
+        """Update this material info's animatable settings based on a Blender material."""
+        super().updateAnimation(mat)
+        self.ubo.update(self.mat.pack())
+
+    def update(self, mat: bpy.types.Material):
+        """Update this material info based on a Blender material."""
+        super().update(mat)
+        self.ubo.update(self.mat.pack())
+
+
+class MaterialManager:
+    pass
 
 
 class ObjectInfo:
@@ -535,7 +601,7 @@ class ObjectInfo:
     _EMPTY_UBO_BYTES = b"\x00" * GLSLMesh.getSize()
 
     def __init__(self):
-        self.batches: dict[MaterialInfo, gpu.types.GPUBatch] = {}
+        self.batches: dict[GLSLMaterialUpdaterWithUBO, gpu.types.GPUBatch] = {}
         self.drawPrio = 0
         self.matrix: Matrix = Matrix.Identity(4)
         self.usedAttrs: set[str] = set()
@@ -543,22 +609,195 @@ class ObjectInfo:
         self.ubo = gpu.types.GPUUniformBuf(self._EMPTY_UBO_BYTES)
 
 
-class MainBRRESRenderer():
-    """Renders a Blender BRRES scene without any post-processing."""
+class TextureManager(ABC):
 
-    def __init__(self, previewMode = False):
-        self.noTransparentOverwrite = False
+    @abstractmethod
+    def updateTexture(self, tex: GLSLTexture):
+        """Update the data corresponding to a texture, creating if nonexistent."""
+
+    @abstractmethod
+    def updateTexturesUsingImage(self, img: bpy.types.Image):
+        """Update the data corresponding to all textures that use some image."""
+
+    @abstractmethod
+    def removeUnused(self):
+        """Free texture resources not used since the last call to this method."""
+
+    @abstractmethod
+    def delete(self):
+        """Clean up resources used by this TextureManager that must be freed."""
+
+
+class BglTextureManager(TextureManager):
+
+    def __init__(self):
+        super().__init__()
+        self._textures: dict[GLSLTexture, tuple[int, int]] = {}
+        """OpenGL bindcode & mipmap count for each texture."""
+        self._images: dict[str, list[bgl.Buffer]] = {}
+        """Data buffer for each mipmap of each image (original included)."""
+        self._usedTextures: set[GLSLTexture] = set()
+        """Set of textures bound since the last removeUnused() call."""
+
+    def _getImage(self, img: bpy.types.Image):
+        """Get the data buffers corresponding to an image, updating if nonexistent."""
+        try:
+            return self._images[img.name]
+        except KeyError:
+            self._updateImage(img)
+            return self._images[img.name]
+
+    def _updateImage(self, img: bpy.types.Image):
+        """Update the data buffers corresponding to an image."""
+        imgFmt = BlendImageExtractor.getFormat(img)
+        px = BlendImageExtractor.getRgba(img, setLargeToBlack=True)
+        adjusted = imgFmt.adjustImg(px).astype(np.float32) # can't be float64 for bgl
+        flattened = adjusted.flatten()
+        mainPxBuffer = bgl.Buffer(bgl.GL_FLOAT, len(flattened), flattened)
+        pxBuffers = [mainPxBuffer]
+        self._images[img.name] = pxBuffers
+        dims = np.array(px.shape[:2][::-1], dtype=np.integer)
+        if not np.all(dims == BlendImageExtractor.getDims(img, setLargeToBlack=True)):
+            print(img.name, dims, BlendImageExtractor.getDims(img, setLargeToBlack=True))
+        # load mipmaps if provided
+        for mm in img.brres.mipmaps:
+            dims //= 2
+            mmPx = BlendImageExtractor.getRgbaWithDims(mm.img, dims)
+            mmPx = imgFmt.adjustImg(mmPx).astype(np.float32).flatten()
+            mmPxBuffer = bgl.Buffer(bgl.GL_FLOAT, len(mmPx), mmPx)
+            pxBuffers.append(mmPxBuffer)
+
+    def _getTexture(self, tex: GLSLTexture):
+        """Get the bindcode and mipmap count for a texture, updating if nonexistent."""
+        try:
+            return self._textures[tex]
+        except KeyError:
+            self.updateTexture(tex)
+            return self._textures[tex]
+
+    def updateTexture(self, tex: GLSLTexture):
+        if not tex.hasImg:
+            return
+        img = bpy.data.images[tex.imgName]
+        bindcodeBuf = bgl.Buffer(bgl.GL_INT, 1)
+        bgl.glGenTextures(1, bindcodeBuf)
+        bindcode = bindcodeBuf[0] # pylint: disable=unsubscriptable-object
+        self._textures[tex] = (bindcode, len(img.brres.mipmaps))
+        bgl.glBindTexture(bgl.GL_TEXTURE_2D, bindcode)
+        imgBuffers = self._getImage(img)
+        fmt = bgl.GL_RGBA
+        dims = BlendImageExtractor.getDims(img, setLargeToBlack=True)
+        for i, b in enumerate(imgBuffers):
+            bgl.glTexImage2D(bgl.GL_TEXTURE_2D, i, fmt, *dims, 0, fmt, bgl.GL_FLOAT, b)
+            dims //= 2
+
+    def updateTexturesUsingImage(self, img: Image):
+        if img.name in self._images:
+            self._updateImage(img)
+            name = img.name
+            for tex in self._textures:
+                if tex.imgName == name:
+                    self.updateTexture(tex)
+
+    def removeUnused(self):
+        unusedBindcodes: list[int] = []
+        for texture in tuple(self._textures): # tuple() so removal doesn't mess w/ iteration
+            if texture not in self._usedTextures:
+                bindcode, numMipmaps = self._textures.pop(texture)
+                unusedBindcodes.append(bindcode)
+        deleteBglTextures(unusedBindcodes)
+        self._usedTextures.clear()
+
+    def delete(self):
+        bindcodes = [bindcode for (bindcode, numMipmaps) in self._textures.values()]
+        deleteBglTextures(bindcodes)
+
+    def bindTexture(self, texture: GLSLTexture):
+        """Bind a texture in the OpenGL state."""
+        self._usedTextures.add(texture)
+        bindcode, mipmapLevels = self._getTexture(texture)
+        bgl.glBindTexture(bgl.GL_TEXTURE_2D, bindcode)
+        bgl.glTexParameteri(bgl.GL_TEXTURE_2D, bgl.GL_TEXTURE_WRAP_S, texture.wrap[0])
+        bgl.glTexParameteri(bgl.GL_TEXTURE_2D, bgl.GL_TEXTURE_WRAP_T, texture.wrap[1])
+        bgl.glTexParameteri(bgl.GL_TEXTURE_2D, bgl.GL_TEXTURE_MIN_FILTER, texture.filter[0])
+        bgl.glTexParameteri(bgl.GL_TEXTURE_2D, bgl.GL_TEXTURE_MAG_FILTER, texture.filter[1])
+        bgl.glTexParameterf(bgl.GL_TEXTURE_2D, bgl.GL_TEXTURE_LOD_BIAS, texture.lodBias)
+        bgl.glTexParameteri(bgl.GL_TEXTURE_2D, bgl.GL_TEXTURE_MAX_LEVEL, mipmapLevels)
+
+
+class PreviewTextureManager(TextureManager):
+
+    def __init__(self):
+        super().__init__()
+        self._textures: dict[GLSLTexture, gpu.types.GPUTexture] = {}
+        """GPUTexture for each texture."""
+        self._images: dict[str, gpu.types.Buffer] = {}
+        """GPU data buffer for each image."""
+        self._usedTextures: set[GLSLTexture] = set()
+        """Set of textures bound since the last removeUnused() call."""
+
+    def _getImage(self, img: bpy.types.Image):
+        """Get the GPU data buffer corresponding to an image, updating if nonexistent."""
+        try:
+            return self._images[img.name]
+        except KeyError:
+            self._updateImage(img)
+            return self._images[img.name]
+
+    def _updateImage(self, img: bpy.types.Image):
+        """Update the GPU data buffer corresponding to an image."""
+        px = BlendImageExtractor.getRgba(img, setLargeToBlack=True)
+        # convert to float32 since float64 (default) is not allowed for 32-bit float buffer
+        adjusted = BlendImageExtractor.getFormat(img).adjustImg(px).astype(np.float32)
+        flattened = adjusted.flatten()
+        self._images[img.name] = gpu.types.Buffer('FLOAT', len(flattened), flattened)
+
+    def getTexture(self, tex: GLSLTexture):
+        """Get the GPUTexture corresponding to a texture, updating if nonexistent."""
+        self._usedTextures.add(tex)
+        try:
+            return self._textures[tex]
+        except KeyError:
+            self.updateTexture(tex)
+            return self._textures[tex]
+
+    def updateTexture(self, tex: GLSLTexture):
+        if not tex.hasImg:
+            return
+        img: bpy.types.Image = bpy.data.images[tex.imgName]
+        pxBuf = self._getImage(img)
+        fmt = 'RGBA32F'
+        dims = BlendImageExtractor.getDims(img, setLargeToBlack=True)
+        self._textures[tex] = gpu.types.GPUTexture(dims, format=fmt, data=pxBuf)
+
+    def updateTexturesUsingImage(self, img: Image):
+        if img.name in self._images:
+            self._updateImage(img)
+            name = img.name
+            for tex in self._textures:
+                if tex.imgName == name:
+                    self.updateTexture(tex)
+
+    def removeUnused(self):
+        self._textures = {
+            glslTex: gpuTex
+            for glslTex, gpuTex in self._textures.items()
+            if glslTex in self._usedTextures
+        }
+        self._usedTextures.clear()
+
+    def delete(self):
+        pass
+
+
+class BrresRenderer(ABC, Generic[TextureManagerT]):
+    """Renders a Blender BRRES scene."""
+
+    def __init__(self):
         self.shader: gpu.types.GPUShader = None
-        self.materials: dict[str, MaterialInfo] = {}
+        self.materials: dict[str, GLSLMaterialUpdaterWithUBO] = {}
         self.objects: dict[str, ObjectInfo] = {}
-        self.images: dict[str, tuple[int, int]] = {}
-        """Bindcode and # of mipmap levels for each image."""
-        # preview mode: used for material preview icons
-        # https://blender.stackexchange.com/questions/285693/custom-render-engine-creating-material-previews-with-opengl
-        # bgl calls during preview drawing cause glitches, so things have to be done differently
-        # this means that custom mipmaps, blending, dithering, culling, and depth testing are
-        # unsupported for previews
-        self.previewMode = previewMode
+        self._textureManager: TextureManagerT = None
 
     @classmethod
     def _compileShader(cls) -> gpu.types.GPUShader:
@@ -621,77 +860,44 @@ class MainBRRESRenderer():
         ibo = gpu.types.GPUIndexBuf(type=batchType, seq=indices)
         return gpu.types.GPUBatch(type=batchType, buf=vbo, elem=ibo)
 
+    def _getDrawCalls(self):
+        """List of things drawn by this renderer.
+        
+        Each item has an object info, material, and batch for drawing, sorted as sorted on hardware.
+        """
+        objects = reversed(self.objects.values())
+        drawCalls = [(o, m, b) for o in objects for m, b in o.batches.items()]
+        drawCalls.sort(key=lambda v: (
+            v[1] and v[1].mat.isXlu,
+            v[0].drawPrio,
+            v[1].mat.name if v[1] else ""
+        ))
+        return drawCalls
 
-    def _updateMatCache(self, mat: bpy.types.Material):
-        """Update a material in the rendering cache, or add it if it's not there yet."""
+    def _getMaterial(self, mat: bpy.types.Material):
+        """Get the GLSLMaterial corresponding to a Blender material, updating if nonexistent."""
         try:
-            self.materials[mat.name].update(mat)
+            return self.materials[mat.name]
         except KeyError:
-            self.materials[mat.name] = MaterialInfo(mat)
-        for tex in mat.brres.textures:
-            img = tex.activeImg
-            if img is not None and img.name not in self.images:
-                self.updateImgCache(img)
+            self._updateMaterial(mat)
+            return self.materials[mat.name]
 
-    def updateImgCache(self, img: bpy.types.Image):
-        """Update an image in the rendering cache, or add it if it's not there yet."""
-        # if image has already been generated, make sure to delete the existing one
-        if img.name in self.images:
-            self._deleteImg(img.name)
-        # get image data
-        # why use img.pixels directly, rather than img.gl_load() or gpu.texture.from_image()?
-        # 3 main reasons
-        # a) more control over texture settings like mipmaps, wrapping, etc (although this doesn't
-        # apply to previews bc we can't use bgl there)
-        # b) direct control over the pixels so we can adjust based on the selected wii format
-        # c) this lets us bypass image colorspace settings & use raw data for all of them
-        # why bypass the colorspace settings? because blender uses linear while nw4r uses srgb
-        # this makes colorspace issues a headache, one example being that since blender
-        # uses linear, raw = linear, which would be misleading for this engine (since you'd expect
-        # raw = srgb); we could add a special case for raw so that it is treated as srgb in
-        # berrybush, but blender would still use raw = linear elsewhere (e.g., the uv editor))
-        # so yeah, this is still a little misleading because we ignore the settings entirely, but i
-        # think this solution will cause the least confusion so it's what i'm going with for now
-        dims = np.array(img.size, dtype=np.integer)
-        px = np.array(img.pixels, dtype=np.float32).reshape(*dims[::-1], img.channels)
-        if dims.max() > gx.MAX_TEXTURE_SIZE: # crop to 1 pixel if too big
-            dims[:] = 1
-            px = px[:1, :1] * 0
-        # pad all image dimensions to at least 1 (render result is 0x0 if unset)
-        dimPadding = [(0, px.shape[i] == 0) for i in range(len(px.shape))]
-        px = np.pad(px, dimPadding)
-        # pad image to 4 channels (rgba) for wii format adjustment
-        chanPadding = [(0, 0)] * len(px.shape)
-        chanPadding[-1] = (0, 4 - px.shape[-1])
-        px = np.pad(px, chanPadding)
-        dims[:] = px.shape[:2][::-1] # update dims after padding
-        imgFmt = IMG_FMTS[img.brres.fmt]
-        px = imgFmt.adjustImg(px).astype(np.float32) # can't be float64 for bgl
-        numChans = px.shape[-1]
-        px = px.flatten()
-        # load image & settings
-        if self.previewMode:
-            # no bgl allowed :( so use this method w/o custom mipmaps
-            # instead of image bindcode & number of mipmap levels, gpu texture is stored
-            fmt = ('R32F', 'RG32F', 'RGB32F', 'RGBA32F')[numChans - 1]
-            pxBuf = gpu.types.Buffer('FLOAT', len(px), px)
-            self.images[img.name] = gpu.types.GPUTexture(dims, format=fmt, data=pxBuf)
-            return
-        bindcodeBuf = bgl.Buffer(bgl.GL_INT, 1)
-        bgl.glGenTextures(1, bindcodeBuf)
-        bindcode = bindcodeBuf[0] # pylint: disable=unsubscriptable-object
-        self.images[img.name] = (bindcode, len(img.brres.mipmaps))
-        bgl.glBindTexture(bgl.GL_TEXTURE_2D, bindcode)
-        b = bgl.Buffer(bgl.GL_FLOAT, len(px), px)
-        fmt = (bgl.GL_RED, bgl.GL_RG, bgl.GL_RGB, bgl.GL_RGBA)[numChans - 1]
-        bgl.glTexImage2D(bgl.GL_TEXTURE_2D, 0, fmt, *dims, 0, fmt, bgl.GL_FLOAT, b)
-        # load mipmaps if provided
-        for i, mm in enumerate(img.brres.mipmaps):
-            dims //= 2
-            mmPx = padImgData(mm.img, (dims[1], dims[0], numChans))
-            mmPx = imgFmt.adjustImg(mmPx).astype(np.float32).flatten()
-            b = bgl.Buffer(bgl.GL_FLOAT, len(mmPx), mmPx)
-            bgl.glTexImage2D(bgl.GL_TEXTURE_2D, i + 1, fmt, *dims, 0, fmt, bgl.GL_FLOAT, b)
+    def _updateMaterial(self, mat: bpy.types.Material):
+        """Update the GLSLMaterial corresponding to a Blender material, creating if nonexistent."""
+        if mat.name not in self.materials:
+            self.materials[mat.name] = GLSLMaterialUpdaterWithUBO()
+        renderMat = self.materials[mat.name]
+        renderMat.update(mat)
+        for tex in renderMat.mat.textures:
+            self._textureManager.updateTexture(tex)
+
+    def _getBrresLayerNames(self, mesh: bpy.types.Mesh) -> tuple[list[str], list[str]]:
+        """Get the BRRES color & UV attribute names for a mesh."""
+        return (mesh.brres.meshAttrs.clrs, mesh.brres.meshAttrs.uvs)
+
+    def delete(self):
+        """Clean up resources managed by this renderer."""
+        self._textureManager.delete()
 
     def _updateMeshCache(self, obj: bpy.types.Object, depsgraph: bpy.types.Depsgraph):
         """Update an object's mesh in the rendering cache, or add it if the object's not there yet.
@@ -725,12 +931,8 @@ class MainBRRESRenderer():
         matLoopIdcs = np.zeros(loopIdcs.shape)
         if len(mesh.materials) > 1: # lookup is wasteful if there's only one material
             matLoopIdcs = getFaceMatIdcs(mesh)[getLoopFaceIdcs(mesh)][loopIdcs]
-        layerNames = (None, None)
-        if self.previewMode:
-            layerNames = (["Col"] * gx.MAX_CLR_ATTRS, ["UVMap"] * gx.MAX_UV_ATTRS)
-        elif brres:
-            layerNames = (brres.meshAttrs.clrs, brres.meshAttrs.uvs)
-        attrs = getLoopAttrs(mesh, *layerNames)
+        layerNames = self._getBrresLayerNames(mesh)
+        attrs = getLoopAttributeData(mesh, *layerNames)
         objInfo.batches.clear()
         noMat = np.full(loopIdcs.shape, len(mesh.materials) == 0) # all loops w/ no material
         matSlotIdcs: dict[bpy.types.Material, list[int]] = {}
@@ -744,9 +946,7 @@ class MainBRRESRenderer():
         if None in matSlotIdcs:
             noMat = np.logical_or(noMat, np.isin(noMat, matSlotIdcs.pop(None)))
         for mat, idcs in matSlotIdcs.items():
-            if mat.name not in self.materials:
-                self._updateMatCache(mat)
-            matInfo = self.materials[mat.name]
+            matInfo = self._getMaterial(mat)
             idcs = loopIdcs[np.isin(matLoopIdcs, idcs)]
             objInfo.batches[matInfo] = self._genBatch('TRIS', attrs, idcs)
         if np.any(noMat):
@@ -767,36 +967,10 @@ class MainBRRESRenderer():
     def _updateObjMtxCache(self, obj: bpy.types.Object):
         """Update an object's matrix in the rendering cache. Do nothing if object's not present."""
         objInfo = self.objects.get(obj.name)
-        if objInfo is not None:
+        if objInfo:
             objInfo.matrix = obj.matrix_world.copy()
 
-    def _deleteImg(self, imgName: str):
-        """Delete an image from the rendering cache and GL context."""
-        if not self.previewMode:
-            bgl.glDeleteTextures(1, bgl.Buffer(bgl.GL_INT, 1, [self.images[imgName][0]]))
-        del self.images[imgName]
-
-    def isPreviewWithFloor(self):
-        """Determine if a material preview with a floor is being rendered.
-
-        (This is necessary because in this case, the floor is skipped while drawing and the
-        background color is set to the world's viewport color; we can't set the background color
-        like this for previews w/o floors, since those need a transparent black background
-        to display properly)
-        """
-        # when there's a floor, there's always an object called "Floor" w/ a material called "Floor"
-        # sometimes there's actually a hidden floor, but its material is called "FloorHidden"
-        try:
-            return self.previewMode and self.materials["Floor"] in self.objects["Floor"].batches
-        except KeyError:
-            return False
-
-    def delete(self):
-        for img in tuple(self.images):
-            self._deleteImg(img)
-
-    def update(self, depsgraph: bpy.types.Depsgraph, context: bpy.types.Context = None,
-               isFinal = False):
+    def update(self, depsgraph: bpy.types.Depsgraph, context: bpy.types.Context = None):
         """Update this renderer's settings from a Blender depsgraph & optional context.
 
         If no context is provided, then the settings will be updated for new & deleted Blender
@@ -806,22 +980,15 @@ class MainBRRESRenderer():
         # (otherwise there are issues w/ material previews, which are my archnemesis at this point)
         if self.shader is None:
             self.shader = self._compileShader()
-        # update scene render settings
-        if depsgraph.id_type_updated('SCENE'):
-            scene = depsgraph.scene
-            isTransparent = isFinal and not self.previewMode and scene.render.film_transparent
-            self.noTransparentOverwrite = isTransparent and scene.brres.renderNoTransparentOverwrite
         # remove deleted stuff
-        isObjUpdate = depsgraph.id_type_updated('OBJECT')
         visObjs = set(depsgraph.objects)
         if context:
             # determine which objects are visible
             vl = context.view_layer
             vp = context.space_data
             visObjs = {ob for ob in visObjs if ob.original.visible_get(view_layer=vl, viewport=vp)}
-        if isObjUpdate:
-            names = {obj.name for obj in visObjs}
-            self.objects = {n: info for n, info in self.objects.items() if n in names}
+        names = {obj.name for obj in visObjs}
+        self.objects = {n: info for n, info in self.objects.items() if n in names}
         isMatUpdate = depsgraph.id_type_updated('MATERIAL')
         if isMatUpdate:
             for matName, matInfo in tuple(self.materials.items()):
@@ -832,12 +999,6 @@ class MainBRRESRenderer():
                     for objName, objInfo in self.objects.items():
                         if matInfo in objInfo.batches:
                             self._updateMeshCache(depsgraph.objects[objName], depsgraph)
-        isImgUpdate = depsgraph.id_type_updated('IMAGE')
-        if isImgUpdate:
-            usedImages = {t.imgName for m in self.materials.values() for t in m.mat.textures}
-            for img in self.images.copy():
-                if img not in usedImages:
-                    self._deleteImg(img)
         # add new stuff
         for obj in visObjs:
             if obj.name not in self.objects:
@@ -846,206 +1007,245 @@ class MainBRRESRenderer():
         tevConfigs = context.scene.brres.tevConfigs if context else ()
         tevIDs = {t.uuid for t in tevConfigs} | {""} # for tev config deletion detection
         for update in depsgraph.updates:
-            updatedID = update.id
-            if isinstance(updatedID, bpy.types.Object) and updatedID.name in self.objects:
-                # check above ensures hidden things that are updated stay hidden
-                if update.is_updated_transform:
-                    self._updateObjMtxCache(updatedID)
-                if update.is_updated_geometry:
-                    self._updateMeshCache(updatedID, depsgraph)
-            elif isinstance(updatedID, bpy.types.Material) and update.is_updated_shading:
-                if update.is_updated_geometry:
+            updateId = update.id
+            if isinstance(updateId, bpy.types.Object):
+                if updateId.name in self.objects:
+                    # check above ensures hidden things that are updated stay hidden
+                    if update.is_updated_transform:
+                        self._updateObjMtxCache(updateId)
+                    if update.is_updated_geometry:
+                        self._updateMeshCache(updateId, depsgraph)
+            elif isinstance(updateId, bpy.types.Material):
+                if update.is_updated_shading and update.is_updated_geometry:
                     # this indicates some material property was changed by the user (not animation)
-                    self._updateMatCache(updatedID)
-                elif updatedID.name in self.materials:
-                    self.materials[updatedID.name].updateAnimation(updatedID, self)
-            elif isinstance(updatedID, bpy.types.Image) and updatedID.name in self.images:
+                    self._updateMaterial(updateId)
+                elif updateId.name in self.materials:
+                    self.materials[updateId.name].updateAnimation(updateId)
+            elif isinstance(updateId, bpy.types.Image):
                 # material updates can sometimes trigger image updates for some reason,
                 # so make sure this is an actual image update
                 if not isMatUpdate or not update.is_updated_shading:
-                    self.updateImgCache(updatedID)
-            elif isinstance(updatedID, bpy.types.Scene) and update.is_updated_geometry:
-                # this implies a tev update, so update all materials that use the active tev
-                # it could also mean a tev was deleted, so also update materials w/ invalid tev ids
-                try:
-                    activeTev = context.active_object.active_material.brres.tevID
-                    for matName in self.materials:
-                        mat = bpy.data.materials[matName]
-                        if mat.brres.tevID == activeTev:
-                            self._updateMatCache(mat)
-                        elif mat.brres.tevID not in tevIDs:
-                            # this means the material's tev was recently deleted, so reset the uuid
-                            # (proputils treats invalid id refs and empty refs the same, but this
-                            # makes it easy to figure out which materials to update when tev configs
-                            # are deleted, as otherwise all materials w/ no tev would update)
-                            mat.brres.tevID = ""
-                            self._updateMatCache(mat)
-                except AttributeError:
-                    # no active material, so don't worry about it
-                    # (or no context provided, which means this is a final render, and in that case
-                    # tev deletion makes no sense as that's not animatable)
-                    pass
-
-    def drawShadow(self, batch: gpu.types.GPUBatch):
-        """Draw a "shadow" for a batch on areas of the screen that haven't yet been written to.
-
-        This effectively makes it so that in these areas, the destination color (if referenced in
-        an operation such as blending) will just be the source color instead.
-
-        (This was used for the removed "Ignore Background" feature, taken out because it's not
-        actually that useful and creates artifacts when low-opacity objects are drawn then blended
-        over by others)
-        """
-        # disable blending & logic op, as the whole point is to ignore the current dst color
-        bgl.glDisable(bgl.GL_BLEND)
-        bgl.glDisable(bgl.GL_COLOR_LOGIC_OP)
-        bgl.glStencilFunc(bgl.GL_NOTEQUAL, True, 0xFF)
-        bgl.glColorMask(True, True, True, False)
-        bgl.glDepthMask(False)
-        batch.draw(self.shader)
-        bgl.glDepthMask(True)
-        bgl.glColorMask(True, True, True, True)
-        bgl.glStencilFunc(bgl.GL_ALWAYS, True, 0xFF)
+                    self._textureManager.updateTexturesUsingImage(updateId)
+            elif isinstance(updateId, bpy.types.Scene) and update.is_updated_geometry:
+                if update.is_updated_geometry:
+                    # this implies a tev update, so update all materials that use the active tev
+                    # it could also mean a tev was deleted, so also
+                    # update materials w/ invalid tev ids
+                    try:
+                        activeTev = context.active_object.active_material.brres.tevID
+                        for matName in self.materials:
+                            mat = bpy.data.materials[matName]
+                            if mat.brres.tevID == activeTev:
+                                self._updateMaterial(mat)
+                            elif mat.brres.tevID not in tevIDs:
+                                # this means the material's tev was recently deleted, so reset uuid
+                                # (proputils treats invalid id refs and empty refs the same, but
+                                # this makes it easy to figure out which materials to update when
+                                # configs are deleted, as otherwise all mats w/ no tev would update)
+                                mat.brres.tevID = ""
+                                self._updateMaterial(mat)
+                    except AttributeError:
+                        # no active material, so don't worry about it
+                        # (or no context provided, which means this is a final render, and in that
+                        # case tev deletion makes no sense as that's not animatable)
+                        pass
 
     def draw(self, projectionMtx: Matrix, viewMtx: Matrix):
         """Draw the current BRRES scene to the active framebuffer."""
+        self.preDraw()
+        for (objInfo, matInfo, batch) in self._getDrawCalls():
+            self.processDrawCall(viewMtx, projectionMtx, objInfo, matInfo, batch)
+        self.postDraw()
+        self._textureManager.removeUnused()
+
+    @abstractmethod
+    def processDrawCall(self, viewMtx: Matrix, projectionMtx: Matrix, objInfo: ObjectInfo,
+                        matInfo: GLSLMaterialUpdaterWithUBO, batch: gpu.types.GPUBatch):
+        """Draw something represented by a "draw call" (object/material/batch tuple)."""
+
+    @abstractmethod
+    def preDraw(self):
+        """Initialize GPU state before draw calls are processed."""
+
+    @abstractmethod
+    def postDraw(self):
+        """Clean up GPU state after draw calls are processed."""
+
+
+class BrresBglRenderer(BrresRenderer[BglTextureManager]):
+    """Renders a Blender BRRES scene using Blender's `bgl` module."""
+
+    def __init__(self, assumeOpaqueMats: bool, noTransparentOverwrite: bool):
+        super().__init__()
+        self._assumeOpaqueMats = assumeOpaqueMats
+        self._noTransparentOverwrite = noTransparentOverwrite
+        self._textureManager = BglTextureManager()
+
+    def _updateMaterial(self, mat: bpy.types.Material):
+        super()._updateMaterial(mat)
+        renderMat = self.materials[mat.name].mat
+        if self._assumeOpaqueMats and not renderMat.enableBlend:
+            renderMat.enableConstAlpha = True
+            renderMat.constAlpha = 1
+
+    def preDraw(self):
         self.shader.bind()
-        if self.previewMode:
-            # for preview mode, bgl isn't allowed, so keep things simple w/ a forced depth test
-            gpu.state.depth_test_set('LESS_EQUAL')
-            # also force the drawn alpha values to be 1, since blending gets weird
-            self.shader.uniform_bool("forceOpaque", [True])
-        else:
-            self.shader.uniform_bool("forceOpaque", [False])
-            # stencil buffer is used to determine which fragments have had values written to them
-            # all 0 at first, and then set to 1 on writes
-            # (used for "ignore background" functionality)
-            bgl.glEnable(bgl.GL_STENCIL_TEST)
-            bgl.glStencilFunc(bgl.GL_ALWAYS, True, 0xFF)
-            bgl.glStencilOp(bgl.GL_REPLACE, bgl.GL_REPLACE, bgl.GL_REPLACE)
-        # get list of draw calls to iterate through
-        # each item in this list has an object info, material, and batch for drawing
-        # this is sorted based on render group, draw priority, & material name,
-        # which is why we have to use this rather than just iterating through self.objInfo
-        objects = self.objects
-        if self.previewMode:
-            objects = {n: o for n, o in objects.items() if n != "Floor"}
-        drawCalls = [(o, m, b) for o in reversed(objects.values()) for m, b in o.batches.items()]
-        drawCalls.sort(key=lambda v: (
-            v[1] is not None and v[1].mat.isXlu,
-            v[0].drawPrio,
-            v[1].mat.name if v[1] is not None else ""
-        ))
-        for objInfo, matInfo, batch in drawCalls:
-            mvMtx = viewMtx @ objInfo.matrix
-            self.shader.uniform_bool("isConstAlphaWrite", [False])
-            self.shader.uniform_float("modelViewProjectionMtx", projectionMtx @ mvMtx)
-            self.shader.uniform_float("normalMtx", mvMtx.to_3x3().inverted_safe().transposed())
-            self.shader.uniform_block("mesh", objInfo.ubo)
-            # load material data
-            if matInfo is not None:
-                self.shader.uniform_block("material", matInfo.ubo)
-                shaderMat = matInfo.mat
-                if self.previewMode:
-                    for i, tex in enumerate(shaderMat.textures):
-                        if tex.hasImg:
-                            self.shader.uniform_sampler(f"image{i}", self.images[tex.imgName])
-                else:
-                    # textures
-                    for i, tex in enumerate(shaderMat.textures):
-                        if tex.hasImg:
-                            bgl.glActiveTexture(bgl.GL_TEXTURE0 + i)
-                            tex.bind(*self.images[tex.imgName])
-                    # dithering
-                    if shaderMat.enableDither:
-                        bgl.glEnable(bgl.GL_DITHER)
-                    else:
-                        bgl.glDisable(bgl.GL_DITHER)
-                    # culling
-                    if shaderMat.enableCulling:
-                        bgl.glEnable(bgl.GL_CULL_FACE)
-                        bgl.glCullFace(shaderMat.cullMode)
-                    else:
-                        bgl.glDisable(bgl.GL_CULL_FACE)
-                    # depth test
-                    if shaderMat.enableDepthTest:
-                        bgl.glEnable(bgl.GL_DEPTH_TEST)
-                    else:
-                        bgl.glDisable(bgl.GL_DEPTH_TEST)
-                    bgl.glDepthFunc(shaderMat.depthFunc)
-                    bgl.glDepthMask(shaderMat.enableDepthUpdate)
-                    # blending & logic op
-                    if shaderMat.enableBlend:
-                        bgl.glDisable(bgl.GL_COLOR_LOGIC_OP)
-                        if shaderMat.blendSubtract:
-                            bgl.glEnable(bgl.GL_BLEND)
-                            bgl.glBlendEquation(bgl.GL_FUNC_SUBTRACT)
-                            bgl.glBlendFunc(bgl.GL_ONE, bgl.GL_ONE)
-                        else:
-                            bgl.glEnable(bgl.GL_BLEND)
-                            bgl.glBlendEquation(bgl.GL_FUNC_ADD)
-                            bgl.glBlendFunc(shaderMat.blendSrcFac, shaderMat.blendDstFac)
-                    else:
-                        bgl.glDisable(bgl.GL_BLEND)
-                        if shaderMat.enableBlendLogic:
-                            bgl.glDisable(bgl.GL_BLEND)
-                            bgl.glEnable(bgl.GL_COLOR_LOGIC_OP)
-                            bgl.glLogicOp(shaderMat.blendLogicOp)
-                        else:
-                            bgl.glDisable(bgl.GL_COLOR_LOGIC_OP)
-            else:
-                self.shader.uniform_block("material", MaterialInfo.EMPTY_UBO)
-                if not self.previewMode:
-                    bgl.glDisable(bgl.GL_STENCIL_TEST)
-                    bgl.glDisable(bgl.GL_BLEND)
-                    bgl.glDisable(bgl.GL_COLOR_LOGIC_OP)
-                    bgl.glDisable(bgl.GL_DITHER)
-                    bgl.glDisable(bgl.GL_CULL_FACE)
-                    bgl.glEnable(bgl.GL_DEPTH_TEST)
-            # draw
-            if self.noTransparentOverwrite:
-                # draw color & alpha separately, w/ special attention to alpha blending
-                # https://en.wikipedia.org/wiki/Alpha_compositing
-                # (btw we can't just use glBlendFuncSeparate for this, bc that doesn't exist in bgl)
+        self.shader.uniform_bool("forceOpaque", [False])
+        # stencil buffer is used to determine which fragments have had values written to them
+        # all 0 at first, and then set to 1 on writes
+        # (used for "ignore background" functionality)
+        bgl.glEnable(bgl.GL_STENCIL_TEST)
+        bgl.glStencilFunc(bgl.GL_ALWAYS, True, 0xFF)
+        bgl.glStencilOp(bgl.GL_REPLACE, bgl.GL_REPLACE, bgl.GL_REPLACE)
 
-                # note: this is done regardless of whether blending is enabled for this material.
-                # this is not required! it does mean that objects w/o blending will still have this
-                # special blending applied, but objects w/o blending should really not have alpha
-                # values anyway (and the "assume opaque materials" setting & constant alpha material
-                # setting take care of that in most cases where it does happen), so i can't really
-                # think of a use case either way
-                # tldr: shaderMat.enableBlend isn't taken into acccount rn, but that's arbitrary
-
-                # rgb
-                bgl.glColorMask(True, True, True, False)
-                batch.draw(self.shader)
-                # alpha
-                bgl.glColorMask(False, False, False, True)
-                bgl.glEnable(bgl.GL_BLEND)
-                bgl.glBlendEquation(bgl.GL_FUNC_ADD)
-                bgl.glBlendFunc(bgl.GL_ONE, bgl.GL_ONE_MINUS_SRC_ALPHA)
-                batch.draw(self.shader)
-                bgl.glColorMask(True, True, True, True)
+    def processDrawCall(self, viewMtx: Matrix, projectionMtx: Matrix, objInfo: ObjectInfo,
+                        matInfo: GLSLMaterialUpdaterWithUBO, batch: gpu.types.GPUBatch):
+        mvMtx = viewMtx @ objInfo.matrix
+        self.shader.uniform_bool("isConstAlphaWrite", [False])
+        self.shader.uniform_float("modelViewProjectionMtx", projectionMtx @ mvMtx)
+        self.shader.uniform_float("normalMtx", mvMtx.to_3x3().inverted_safe().transposed())
+        self.shader.uniform_block("mesh", objInfo.ubo)
+        # load material data
+        if matInfo is not None:
+            self.shader.uniform_block("material", matInfo.ubo)
+            shaderMat = matInfo.mat
+            # textures
+            for i, tex in enumerate(shaderMat.textures):
+                if tex.hasImg:
+                    bgl.glActiveTexture(bgl.GL_TEXTURE0 + i)
+                    self._textureManager.bindTexture(tex)
+            # dithering
+            if shaderMat.enableDither:
+                bgl.glEnable(bgl.GL_DITHER)
             else:
-                batch.draw(self.shader)
-            # write constant alpha if enabled (must be done after blending, hence 2 draw calls)
-            if not self.previewMode and matInfo and matInfo.mat.enableConstAlpha:
-                bgl.glDisable(bgl.GL_BLEND)
-                bgl.glDisable(bgl.GL_COLOR_LOGIC_OP)
                 bgl.glDisable(bgl.GL_DITHER)
-                self.shader.uniform_bool("isConstAlphaWrite", [True])
-                bgl.glColorMask(False, False, False, True)
-                batch.draw(self.shader)
-                bgl.glColorMask(True, True, True, True)
-        # clean up gpu state
-        if self.previewMode:
-            gpu.state.depth_test_set('NONE')
+            # culling
+            if shaderMat.enableCulling:
+                bgl.glEnable(bgl.GL_CULL_FACE)
+                bgl.glCullFace(shaderMat.cullMode)
+            else:
+                bgl.glDisable(bgl.GL_CULL_FACE)
+            # depth test
+            if shaderMat.enableDepthTest:
+                bgl.glEnable(bgl.GL_DEPTH_TEST)
+            else:
+                bgl.glDisable(bgl.GL_DEPTH_TEST)
+            bgl.glDepthFunc(shaderMat.depthFunc)
+            bgl.glDepthMask(shaderMat.enableDepthUpdate)
+            # blending & logic op
+            if shaderMat.enableBlend:
+                bgl.glDisable(bgl.GL_COLOR_LOGIC_OP)
+                if shaderMat.blendSubtract:
+                    bgl.glEnable(bgl.GL_BLEND)
+                    bgl.glBlendEquation(bgl.GL_FUNC_SUBTRACT)
+                    bgl.glBlendFunc(bgl.GL_ONE, bgl.GL_ONE)
+                else:
+                    bgl.glEnable(bgl.GL_BLEND)
+                    bgl.glBlendEquation(bgl.GL_FUNC_ADD)
+                    bgl.glBlendFunc(shaderMat.blendSrcFac, shaderMat.blendDstFac)
+            else:
+                bgl.glDisable(bgl.GL_BLEND)
+                if shaderMat.enableBlendLogic:
+                    bgl.glDisable(bgl.GL_BLEND)
+                    bgl.glEnable(bgl.GL_COLOR_LOGIC_OP)
+                    bgl.glLogicOp(shaderMat.blendLogicOp)
+                else:
+                    bgl.glDisable(bgl.GL_COLOR_LOGIC_OP)
         else:
+            self.shader.uniform_block("material", GLSLMaterialUpdaterWithUBO.EMPTY_UBO)
+            bgl.glDisable(bgl.GL_STENCIL_TEST)
             bgl.glDisable(bgl.GL_BLEND)
             bgl.glDisable(bgl.GL_COLOR_LOGIC_OP)
             bgl.glDisable(bgl.GL_DITHER)
             bgl.glDisable(bgl.GL_CULL_FACE)
-            bgl.glDisable(bgl.GL_DEPTH_TEST)
+            bgl.glEnable(bgl.GL_DEPTH_TEST)
+        # draw
+        if self._noTransparentOverwrite:
+            # draw color & alpha separately, w/ special attention to alpha blending
+            # https://en.wikipedia.org/wiki/Alpha_compositing
+            # (btw we can't just use glBlendFuncSeparate for this, bc that doesn't exist in bgl)
+
+            # note: this is done regardless of whether blending is enabled for this material.
+            # this is not required! it does mean that objects w/o blending will still have this
+            # special blending applied, but objects w/o blending should really not have alpha
+            # values anyway (and the "assume opaque materials" setting & constant alpha material
+            # setting take care of that in most cases where it does happen), so i can't really
+            # think of a use case either way
+            # tldr: shaderMat.enableBlend isn't taken into acccount rn, but that's arbitrary
+
+            # rgb
+            bgl.glColorMask(True, True, True, False)
+            batch.draw(self.shader)
+            # alpha
+            bgl.glColorMask(False, False, False, True)
+            bgl.glEnable(bgl.GL_BLEND)
+            bgl.glBlendEquation(bgl.GL_FUNC_ADD)
+            bgl.glBlendFunc(bgl.GL_ONE, bgl.GL_ONE_MINUS_SRC_ALPHA)
+            batch.draw(self.shader)
+            bgl.glColorMask(True, True, True, True)
+        else:
+            batch.draw(self.shader)
+        # write constant alpha if enabled (must be done after blending, hence 2 draw calls)
+        if matInfo and matInfo.mat.enableConstAlpha:
+            bgl.glDisable(bgl.GL_BLEND)
+            bgl.glDisable(bgl.GL_COLOR_LOGIC_OP)
+            bgl.glDisable(bgl.GL_DITHER)
+            self.shader.uniform_bool("isConstAlphaWrite", [True])
+            bgl.glColorMask(False, False, False, True)
+            batch.draw(self.shader)
+            bgl.glColorMask(True, True, True, True)
+
+    def postDraw(self):
+        bgl.glDisable(bgl.GL_BLEND)
+        bgl.glDisable(bgl.GL_COLOR_LOGIC_OP)
+        bgl.glDisable(bgl.GL_DITHER)
+        bgl.glDisable(bgl.GL_CULL_FACE)
+        bgl.glDisable(bgl.GL_DEPTH_TEST)
+
+
+class BrresPreviewRenderer(BrresRenderer[PreviewTextureManager]):
+    """Renders a Blender BRRES scene in "preview mode".
+    
+    Preview mode: Exclusively uses Blender's `gpu` module for rendering without touching the
+    deprecated `bgl` module. This approach offers less control and therefore less accuracy
+    (in general, it means rendering is significantly simplified), but it's required for material
+    preview icon generation, which doesn't play nicely with `bgl`.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self._textureManager = PreviewTextureManager()
+
+    def _getBrresLayerNames(self, mesh: bpy.types.Mesh):
+        return (["Col"] * gx.MAX_CLR_ATTRS, ["UVMap"] * gx.MAX_UV_ATTRS)
+
+    def preDraw(self):
+        self.shader.bind()
+        # since bgl isn't allowed, keep things simple w/ a forced depth test
+        gpu.state.depth_test_set('LESS_EQUAL')
+        # also force drawn alpha values to be 1, since blending gets weird
+        self.shader.uniform_bool("forceOpaque", [True])
+
+    def processDrawCall(self, viewMtx: Matrix, projectionMtx: Matrix, objInfo: ObjectInfo,
+                        matInfo: GLSLMaterialUpdaterWithUBO, batch: gpu.types.GPUBatch):
+        mvMtx = viewMtx @ objInfo.matrix
+        self.shader.uniform_bool("isConstAlphaWrite", [False])
+        self.shader.uniform_float("modelViewProjectionMtx", projectionMtx @ mvMtx)
+        self.shader.uniform_float("normalMtx", mvMtx.to_3x3().inverted_safe().transposed())
+        self.shader.uniform_block("mesh", objInfo.ubo)
+        # load material data
+        if matInfo:
+            self.shader.uniform_block("material", matInfo.ubo)
+            for i, tex in enumerate(matInfo.mat.textures):
+                if tex.hasImg:
+                    self.shader.uniform_sampler(f"image{i}", self._textureManager.getTexture(tex))
+        else:
+            self.shader.uniform_block("material", GLSLMaterialUpdaterWithUBO.EMPTY_UBO)
+        # draw
+        batch.draw(self.shader)
+
+    def postDraw(self):
+        gpu.state.depth_test_set('NONE')
 
 
 class BRRESRenderEngine(bpy.types.RenderEngine):
@@ -1059,8 +1259,11 @@ class BRRESRenderEngine(bpy.types.RenderEngine):
     bl_use_eevee_viewport = False
 
     def __init__(self):
-        self.mainRenderer = MainBRRESRenderer(self.is_preview)
-        self.backgroundColor = self._getWorldColor()
+        self._sceneRenderers: dict[str, BrresRenderer] = {}
+        """Maps scene names to their BRRES renderers."""
+        self.isViewport = True
+        """Whether a viewport render is being rendered."""
+        self._backgroundColor = (0, 0, 0)
         # shader & batch
         verts = {"position": [[-1, -1], [1, -1], [-1, 1], [1, 1]]}
         idcs = [[0, 1, 2], [3, 2, 1]]
@@ -1070,6 +1273,22 @@ class BRRESRenderEngine(bpy.types.RenderEngine):
         self.offscreen: gpu.types.GPUOffScreen = None
         # dimensions
         self._updateDims((1, 1))
+
+    def _getSceneRenderer(self, scene: bpy.types.Scene):
+        """Get the BRRES renderer for a scene, creating one if it doesn't exist yet."""
+        try:
+            return self._sceneRenderers[scene.name]
+        except KeyError:
+            renderer: BrresRenderer
+            if self.is_preview:
+                renderer = BrresPreviewRenderer()
+            else:
+                isTransparent = scene.render.film_transparent and not self.isViewport
+                assumeOpaqueMats = isTransparent and scene.brres.renderAssumeOpaqueMats
+                noTransparentOverwrite = isTransparent and scene.brres.renderNoTransparentOverwrite
+                renderer = BrresBglRenderer(assumeOpaqueMats, noTransparentOverwrite)
+            self._sceneRenderers[scene.name] = renderer
+            return renderer
 
     @classmethod
     def _compileShader(cls) -> gpu.types.GPUShader:
@@ -1102,11 +1321,6 @@ class BRRESRenderEngine(bpy.types.RenderEngine):
         self.offscreen = gpu.types.GPUOffScreen(*dims)
         if not self.is_preview:
             bgl.glBindFramebuffer(bgl.GL_FRAMEBUFFER, activeFb[0]) # pylint: disable=unsubscriptable-object
-
-    @classmethod
-    def _getWorldColor(cls):
-        """Get the color of the active world in Blender, converted to the SRGB color space."""
-        return np.array(bpy.context.scene.world.color[:3]) ** .4545
 
     @classmethod
     def getSupportedBlenderPanels(cls):
@@ -1146,12 +1360,13 @@ class BRRESRenderEngine(bpy.types.RenderEngine):
 
     def __del__(self):
         try:
-            self.mainRenderer.delete()
+            for renderer in self._sceneRenderers.values():
+                renderer.delete()
             self.offscreen.free()
         except AttributeError:
             pass
 
-    def drawScene(self, projectionMtx: Matrix, viewMtx: Matrix, doAlpha = False):
+    def _drawScene(self, scene: bpy.types.Scene, projectionMtx: Matrix, viewMtx: Matrix):
         # get active framebuffer for re-bind to fix the problem described in _updateDims,
         # since it also gets triggered when the offscreen is bound immediately after creation
         # (seemingly not necessary after first frame, but i'm doing it every time anyway to be safe)
@@ -1163,23 +1378,24 @@ class BRRESRenderEngine(bpy.types.RenderEngine):
             # write mask must be enabled to clear
             bgl.glDepthMask(True)
             bgl.glStencilMask(0xFF)
-            fb.clear(color=(*self.backgroundColor, 0), depth=1, stencil=0)
-            self.mainRenderer.draw(projectionMtx, viewMtx)
+            fb.clear(color=(*self._backgroundColor, 0), depth=1, stencil=0)
+            self._getSceneRenderer(scene).draw(projectionMtx, viewMtx)
         # pass 2: post-processing
         bgl.glBindFramebuffer(bgl.GL_FRAMEBUFFER, activeFb[0]) # pylint: disable=unsubscriptable-object
         bgl.glActiveTexture(bgl.GL_TEXTURE0)
         bgl.glBindTexture(bgl.GL_TEXTURE_2D, self.offscreen.color_texture)
         self.shader.bind()
+        doAlpha = scene.render.film_transparent and not self.isViewport
         self.shader.uniform_bool("doAlpha", [doAlpha])
         self.batch.draw(self.shader)
 
-    def drawPreview(self, projectionMtx: Matrix, viewMtx: Matrix):
-        """Draw the current BRRES scene in preview mode (no bgl) to the active framebuffer."""
+    def _drawPreview(self, scene: bpy.types.Scene, projectionMtx: Matrix, viewMtx: Matrix):
+        """Draw a BRRES scene in preview mode (no bgl) to the active framebuffer."""
         # pass 1: main rendering
         with self.offscreen.bind():
             fb: gpu.types.GPUFrameBuffer = gpu.state.active_framebuffer_get()
-            fb.clear(color=(*self.backgroundColor, 0), depth=1)
-            self.mainRenderer.draw(projectionMtx, viewMtx)
+            fb.clear(color=(*self._backgroundColor, 0), depth=1)
+            self._getSceneRenderer(scene).draw(projectionMtx, viewMtx)
         # pass 2: post-processing
         self.shader.bind()
         self.shader.uniform_sampler("tex", self.offscreen.texture_color)
@@ -1187,16 +1403,14 @@ class BRRESRenderEngine(bpy.types.RenderEngine):
         self.batch.draw(self.shader)
 
     def render(self, depsgraph: bpy.types.Depsgraph):
-        self.mainRenderer.update(depsgraph, isFinal=True)
+        self.isViewport = False
         scene = depsgraph.scene
         render = scene.render
+        self._getSceneRenderer(scene).update(depsgraph)
         scale = render.resolution_percentage / 100
         dims = (int(render.resolution_x * scale), int(render.resolution_y * scale))
         self._updateDims(dims)
         result = self.begin_result(0, 0, *dims, layer=depsgraph.view_layer.name)
-        isTransparentRender = render.film_transparent and not self.is_preview
-        if isTransparentRender or (self.is_preview and not self.mainRenderer.isPreviewWithFloor()):
-            self.backgroundColor = (0, 0, 0)
         projectionMtx = scene.camera.calc_matrix_camera(depsgraph, x=dims[0], y=dims[1])
         viewMtx = scene.camera.matrix_world.inverted()
         # after way too much debugging, i've found that this is false by default :)
@@ -1207,9 +1421,9 @@ class BRRESRenderEngine(bpy.types.RenderEngine):
         with offscreen.bind():
             fb: gpu.types.GPUFrameBuffer = gpu.state.active_framebuffer_get()
             if self.is_preview:
-                self.drawPreview(projectionMtx, viewMtx)
+                self._drawPreview(scene, projectionMtx, viewMtx)
             else:
-                self.drawScene(projectionMtx, viewMtx, isTransparentRender)
+                self._drawScene(scene, projectionMtx, viewMtx)
             b = gpu.types.Buffer('FLOAT', (dims[0] * dims[1], 4))
             fb.read_color(0, 0, *dims, 4, 0, 'FLOAT', data=b)
             result.layers[0].passes["Combined"].rect.foreach_set(b)
@@ -1222,12 +1436,13 @@ class BRRESRenderEngine(bpy.types.RenderEngine):
         # pr = cProfile.Profile()
         # pr.enable()
 
-        self.mainRenderer.update(depsgraph, context)
+        self.isViewport = True
+        scene = context.scene
+        self._getSceneRenderer(scene).update(depsgraph, context)
         dims = (context.region.width, context.region.height)
         if dims != self.dims:
             self._updateDims(dims)
-        if depsgraph.id_type_updated('WORLD'):
-            self.backgroundColor = self._getWorldColor()
+        self._backgroundColor = np.array(context.scene.world.color[:3]) ** .4545
         # this makes response immediate for some updates that otherwise result in a delayed draw
         # (for instance, using the proputils collection move operators)
         self.tag_redraw()
@@ -1238,7 +1453,12 @@ class BRRESRenderEngine(bpy.types.RenderEngine):
         #     ps.print_stats()
 
     def view_draw(self, context, depsgraph):
-        self.drawScene(context.region_data.window_matrix, context.region_data.view_matrix)
+        self.isViewport = True
+        self._drawScene(
+            scene=context.scene,
+            projectionMtx=context.region_data.window_matrix,
+            viewMtx=context.region_data.view_matrix
+        )
 
 
 class FilmPanel(PropertyPanel):

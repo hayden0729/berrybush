@@ -19,6 +19,7 @@ from .common import (
 )
 from .limiter import ObjectLimiter, ObjectLimiterFactory
 from .material import AlphaSettings, DepthSettings, LightChannelSettings, MiscMatSettings
+from .render import BlendImageExtractor
 from .tev import TevSettings, TevStageSettings
 from .texture import TexSettings
 from .updater import addonVer, verStr
@@ -29,17 +30,6 @@ from ..wii import (
 
 
 ANIM_SUBFILE_T = TypeVar("ANIM_SUBFILE_T", bound=animation.AnimSubfile)
-
-IMG_FMTS: dict[str, type[tex0.ImageFormat]] = {
-    'I4': tex0.I4,
-    'I8': tex0.I8,
-    'IA4': tex0.IA4,
-    'IA8': tex0.IA8,
-    'RGB565': tex0.RGB565,
-    'RGB5A3': tex0.RGB5A3,
-    'RGBA8': tex0.RGBA8,
-    'CMPR': tex0.CMPR
-}
 
 
 IDENTITY_EULER = Euler()
@@ -1339,16 +1329,13 @@ class BRRESExporter():
         img = tex0.TEX0(bImg.name)
         self.images[bImg] = img
         self.res.folder(tex0.TEX0).append(img)
-        dims = np.array(bImg.size, dtype=np.integer)
-        px = np.array(bImg.pixels).reshape(dims[1], dims[0], bImg.channels)
-        # pad all image dimensions to at least 1 (render result is 0x0 if unset) & channels to 4
-        px = np.pad(px, ((0, dims[1] == 0), (0, dims[0] == 0), (0, 4 - bImg.channels)))
-        dims[dims == 0] = 1
+        img.fmt = BlendImageExtractor.getFormat(bImg)
+        px = BlendImageExtractor.getRgba(img)
         img.images.append(px[::-1])
-        img.fmt = IMG_FMTS[bImg.brres.fmt]
+        dims = np.array(px.shape[:2], dtype=np.integer)
         for mm in bImg.brres.mipmaps:
             dims //= 2
-            mmPx = padImgData(mm.img, (dims[1], dims[0], 4))[::-1]
+            mmPx = BlendImageExtractor.getRgbaWithDims(mm.img, dims)[::-1]
             img.images.append(mmPx)
 
     def imgName(self, img: bpy.types.Image):
