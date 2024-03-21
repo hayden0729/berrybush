@@ -864,7 +864,10 @@ class StandardMaterialManager(MaterialManager[TextureManagerT]):
     def _updateMaterialAnimation(self, mat: bpy.types.Material):
         """Update animation data for the RenderMaterial of a Blender material if it exists."""
         try:
-            self._materials[mat.name].updateAnimation(mat)
+            renderMat = self._materials[mat.name]
+            renderMat.updateAnimation(mat)
+            for tex in renderMat.shaderMat.textures:
+                self._textureManager.updateTexture(tex)
         except KeyError:
             pass
 
