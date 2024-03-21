@@ -33,6 +33,7 @@ from ..wii import gx, tex0, transform as tf
 
 TextureManagerT = TypeVar("TextureManagerT", bound="TextureManager")
 MaterialManagerT = TypeVar("MaterialManagerT", bound="MaterialManager")
+ObjectManagerT = TypeVar("ObjectManagerT", bound="ObjectManager")
 
 
 TEX_WRAPS = {
@@ -889,19 +890,44 @@ class RenderObject:
         self.matrix = obj.matrix_world.copy()
 
 
-class ObjectManager(Generic[MaterialManagerT]):
+class ObjectManager(ABC, Generic[MaterialManagerT]):
 
-    def __init__(self, materialManager: MaterialManagerT):
-        self._materialManager = materialManager
-        self._objects: dict[str, RenderObject] = {}
-        """Object for each object."""
-
-    def getDrawCalls(self):
+    @abstractmethod
+    def getDrawCalls(self) -> list[tuple[RenderObject, RenderMaterial, "BatchInfo"]]:
         """List of things drawn by this renderer.
         
         Each item has a RenderObject, RenderMaterial, and BatchInfo for drawing,
         sorted as sorted on the Wii.
         """
+
+    @abstractmethod
+    def addNewAndRemoveUnusedObjects(self, depsgraph: bpy.types.Depsgraph,
+                                     context: bpy.types.Context = None):
+        """Add new objects to this manager from depsgraph & context data, and remove RenderObjects
+        without corresponding Blender objects.
+        
+        Aside from potential removal, existing RenderObjects are not updated."""
+
+    @abstractmethod
+    def updateObjectsUsingMaterial(self, renderMat: RenderMaterial, depsgraph: bpy.types.Depsgraph):
+        """Update all objects in this manager that use some RenderMaterial."""
+
+    @abstractmethod
+    def processDepsgraphUpdate(self, update: bpy.types.DepsgraphUpdate):
+        """Update a RenderObject from a DepsgraphUpdate.
+        
+        (Update is only performed if the RenderObject already exists; new ones are not created)
+        """
+
+
+class StandardObjectManager(ObjectManager[MaterialManagerT]):
+
+    def __init__(self, materialManager: MaterialManagerT):
+        self._materialManager = materialManager
+        self._objects: dict[str, RenderObject] = {}
+        """RenderObject for each Blender object name."""
+
+    def getDrawCalls(self):
         objects = reversed(self._objects.values())
         drawCalls = [(o, m, b) for o in objects for m, b in o.batches.items()]
         drawCalls.sort(key=lambda v: (
@@ -913,10 +939,6 @@ class ObjectManager(Generic[MaterialManagerT]):
 
     def addNewAndRemoveUnusedObjects(self, depsgraph: bpy.types.Depsgraph,
                                      context: bpy.types.Context = None):
-        """Add new objects to this manager from depsgraph & context data, and remove RenderObjects
-        without corresponding Blender objects.
-        
-        Aside from potential removal, existing RenderObjects are not updated."""
         visibleObjects = set(depsgraph.objects)
         if context:
             # determine which objects are visible
@@ -934,16 +956,11 @@ class ObjectManager(Generic[MaterialManagerT]):
         self._objects = {n: info for n, info in self._objects.items() if n in names}
 
     def updateObjectsUsingMaterial(self, renderMat: RenderMaterial, depsgraph: bpy.types.Depsgraph):
-        """Update all objects in this manager that use some RenderMaterial."""
         for blendObjName, renderObject in self._objects.items():
             if renderMat in renderObject.batches:
                 self._updateObject(depsgraph.objects[blendObjName])
 
     def processDepsgraphUpdate(self, update: bpy.types.DepsgraphUpdate):
-        """Update a RenderObject from a DepsgraphUpdate.
-        
-        (Update is only performed if the RenderObject already exists; new ones are not created)
-        """
         obj = update.id
         if isinstance(obj, bpy.types.Object) and obj.name in self._objects:
             if update.is_updated_transform:
@@ -1017,6 +1034,18 @@ class ObjectManager(Generic[MaterialManagerT]):
         obj.to_mesh_clear()
 
 
+class PreviewObjectManager(StandardObjectManager[MaterialManagerT]):
+    """Object manager for material previews (the "Floor" object is never drawn)"""
+
+    def getDrawCalls(self):
+        drawCalls = super().getDrawCalls()
+        try:
+            floor = self._objects["Floor"]
+            return [(o, m ,b) for (o, m, b) in drawCalls if o is not floor]
+        except KeyError:
+            return drawCalls
+
+
 class BatchInfo:
     """Data necessary to create a GPU batch, independent from a shader."""
 
@@ -1072,14 +1101,14 @@ class BatchManager:
             pass
 
 
-class BrresRenderer(ABC, Generic[TextureManagerT]):
+class BrresRenderer(ABC, Generic[TextureManagerT, MaterialManagerT, ObjectManagerT]):
     """Renders a Blender BRRES scene."""
 
     def __init__(self):
         self.shader: gpu.types.GPUShader = None
         self._textureManager: TextureManagerT = None
-        self._materialManager: MaterialManager[TextureManagerT] = None
-        self._objectManager: ObjectManager[StandardMaterialManager[TextureManagerT]] = None
+        self._materialManager: MaterialManagerT = None
+        self._objectManager: ObjectManagerT = None
         self._batchManager: BatchManager = None
 
     @classmethod
@@ -1206,7 +1235,8 @@ class BrresRenderer(ABC, Generic[TextureManagerT]):
         """Clean up GPU state after draw calls are processed."""
 
 
-class BrresBglRenderer(BrresRenderer[BglTextureManager]):
+class BrresBglRenderer(BrresRenderer[BglTextureManager, StandardMaterialManager,
+                                     StandardObjectManager]):
     """Renders a Blender BRRES scene using Blender's `bgl` module."""
 
     def __init__(self, assumeOpaqueMats: bool, noTransparentOverwrite: bool):
@@ -1214,7 +1244,7 @@ class BrresBglRenderer(BrresRenderer[BglTextureManager]):
         self._noTransparentOverwrite = noTransparentOverwrite
         self._textureManager = BglTextureManager()
         self._materialManager = StandardMaterialManager(self._textureManager, assumeOpaqueMats)
-        self._objectManager = ObjectManager(self._materialManager)
+        self._objectManager = StandardObjectManager(self._materialManager)
 
     def preDraw(self):
         self.shader.bind()
@@ -1331,7 +1361,8 @@ class BrresBglRenderer(BrresRenderer[BglTextureManager]):
         bgl.glDisable(bgl.GL_DEPTH_TEST)
 
 
-class BrresPreviewRenderer(BrresRenderer[PreviewTextureManager]):
+class BrresPreviewRenderer(BrresRenderer[BglTextureManager, StandardMaterialManager,
+                                         PreviewObjectManager]):
     """Renders a Blender BRRES scene in "preview mode".
     
     Preview mode: Exclusively uses Blender's `gpu` module for rendering without touching the
@@ -1344,7 +1375,7 @@ class BrresPreviewRenderer(BrresRenderer[PreviewTextureManager]):
         super().__init__()
         self._textureManager = PreviewTextureManager()
         self._materialManager = StandardMaterialManager(self._textureManager)
-        self._objectManager = ObjectManager(self._materialManager)
+        self._objectManager = PreviewObjectManager(self._materialManager)
 
     def _getBrresLayerNames(self, mesh: bpy.types.Mesh):
         return (["Col"] * gx.MAX_CLR_ATTRS, ["UVMap"] * gx.MAX_UV_ATTRS)
