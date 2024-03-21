@@ -1489,8 +1489,6 @@ class BerryBushRenderEngine(bpy.types.RenderEngine):
         panels: set[type[bpy.types.Panel]] = set()
         # support panels w/ BLENDER_RENDER, plus anything in additional & minus anything in excluded
         additional = {
-            # preview stuff disabled as it's bugged for now and idk the fix; see
-            # https://blender.stackexchange.com/questions/285693/custom-render-engine-creating-material-previews-with-opengl
             "MATERIAL_PT_preview",
             "EEVEE_MATERIAL_PT_context_material"
         }
