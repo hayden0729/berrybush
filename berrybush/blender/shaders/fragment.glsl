@@ -28,7 +28,7 @@ vec3 getConstColor(int sel) {
 
 vec4 getLightChanColor(int chanIdx) {
     // get color output for a light channel
-    RenderLightChan lc = material.lightChans[chanIdx];
+    ShaderLightChan lc = material.lightChans[chanIdx];
     vec4 color;
     int constVertColor = mesh.colors[chanIdx];
     vec4 vertColor = (constVertColor == -1) ? fragColor[chanIdx] : vec4(constVertColor);
@@ -46,7 +46,7 @@ vec4 getLightChanColor(int chanIdx) {
     return color;
 }
 
-vec4 getRasColor(RenderTevStage stage) {
+vec4 getRasColor(ShaderTevStage stage) {
     // get raster color for a stage
     int sel = stage.sels.ras;
     vec4 rasterColor = vec4(0.0);
@@ -59,7 +59,7 @@ vec4 getRasColor(RenderTevStage stage) {
     return swapColors(rasterColor, stage.sels.rasSwap);
 }
 
-vec2 getTexCoord(RenderTexture tex) {
+vec2 getTexCoord(ShaderTexture tex) {
     // get the coordinate to sample for a texture
     vec3 coord = vec3(0.0);
     int mapMode = tex.mapMode;
@@ -110,17 +110,17 @@ vec4 sampleTexture(int texIdx, vec2 coord) {
     }
 }
 
-vec4 sampleStageTexture(RenderTevStage stage) {
+vec4 sampleStageTexture(ShaderTevStage stage) {
     // sample a stage's texture w/ color swap applied
     int texIdx = stage.sels.tex;
     vec4 texColor = vec4(0.0);
     if (texIdx < material.numTextures) {
-        RenderTexture tex = material.textures[texIdx];
+        ShaderTexture tex = material.textures[texIdx];
         if (tex.hasImg) {
             vec2 texCoord = getTexCoord(tex);
             if (0 <= stage.ind.mtxIdx && stage.ind.mtxIdx < material.numIndMtcs) {
                 // apply indirect texturing, as long as a valid indirect texture is selected
-                RenderIndTex ind = material.inds[stage.ind.texIdx];
+                ShaderIndTex ind = material.inds[stage.ind.texIdx];
                 if (ind.texIdx < material.numTextures) {
                     int mode = ind.mode;
                     switch (mode) {
@@ -149,11 +149,11 @@ vec4 getTevOutput() {
     // calculate the main output of the tev stages
     mat4 outputColors = material.outputColors;
     for (int stageIdx = 0; stageIdx < material.numStages; stageIdx += 1) {
-        RenderTevStage stage = material.stages[stageIdx];
+        ShaderTevStage stage = material.stages[stageIdx];
         mat4x3 colorArgs;
         for (int calcIdx = 0; calcIdx < 2; calcIdx += 1) { // one calculation for color, one for alpha
             bool isAlpha = (calcIdx == 1);
-            RenderTevStageCalcParams params = (isAlpha) ? stage.alphaParams : stage.colorParams;
+            ShaderTevStageCalcParams params = (isAlpha) ? stage.alphaParams : stage.colorParams;
             mat4x3 args;
             for (int argIdx = 0; argIdx < 4; argIdx++) {
                 int arg = params.args[argIdx];
@@ -245,7 +245,7 @@ vec4 getTevOutput() {
         }
     }
     // return outputColors[0];
-    RenderTevStage lastStage = material.stages[material.numStages - 1];
+    ShaderTevStage lastStage = material.stages[material.numStages - 1];
     return vec4(outputColors[lastStage.colorParams.outputIdx].rgb, outputColors[lastStage.alphaParams.outputIdx].a);
 }
 
