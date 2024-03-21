@@ -901,8 +901,8 @@ class ObjectManager(Generic[MaterialManagerT]):
         objects = reversed(self._objects.values())
         drawCalls = [(o, m, b) for o in objects for m, b in o.batches.items()]
         drawCalls.sort(key=lambda v: (
-            v[1] and v[1].shaderMat.isXlu,
-            v[0].drawPrio,
+            v[1] is not None and v[1].shaderMat.isXlu,
+            v[0].drawPriority,
             v[1].shaderMat.name if v[1] else ""
         ))
         return drawCalls
