@@ -1,5 +1,6 @@
 # standard imports
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 import pathlib
 from typing import Generic, TypeVar
 # 3rd party imports
@@ -32,6 +33,7 @@ from ..wii import gx, tex0, transform as tf
 
 
 TextureManagerT = TypeVar("TextureManagerT", bound="TextureManager")
+MaterialManagerT = TypeVar("MaterialManagerT", bound="MaterialManager")
 
 
 TEX_WRAPS = {
@@ -521,7 +523,7 @@ class RenderMaterial:
         self.ubo.update(self.shaderMat.pack())
 
     def update(self, mat: bpy.types.Material):
-        """Update this material based on a Blender material."""
+        """Update this RenderMaterial based on a Blender material."""
         brres = mat.brres
         shaderMat = self.shaderMat
         shaderMat.name = mat.name
@@ -596,32 +598,11 @@ class RenderMaterial:
         self.ubo.update(self.shaderMat.pack())
 
 
-class ObjectInfo:
-
-    _EMPTY_UBO_BYTES = b"\x00" * ShaderMesh.getSize()
-
-    def __init__(self):
-        self.batches: dict[RenderMaterial, gpu.types.GPUBatch] = {}
-        self.drawPrio = 0
-        self.matrix: Matrix = Matrix.Identity(4)
-        self.usedAttrs: set[str] = set()
-        self.mesh = ShaderMesh()
-        self.ubo = gpu.types.GPUUniformBuf(self._EMPTY_UBO_BYTES)
-
-
 class MaterialManager(ABC, Generic[TextureManagerT]):
 
     @abstractmethod
     def getMaterial(self, mat: bpy.types.Material) -> RenderMaterial:
         """Get the RenderMaterial for a Blender material, updating if nonexistent."""
-
-    @abstractmethod
-    def updateMaterial(self, mat: bpy.types.Material):
-        """Update the RenderMaterial for a Blender material, creating if nonexistent."""
-
-    @abstractmethod
-    def updateMaterialAnimation(self, mat: bpy.types.Material):
-        """Update anim data for the RenderMaterial of a Blender material if it exists."""
 
     @abstractmethod
     def popInvalidMaterials(self) -> list[RenderMaterial]:
@@ -634,6 +615,13 @@ class MaterialManager(ABC, Generic[TextureManagerT]):
     @abstractmethod
     def updateMaterialsUsingInvalidTevIds(self, validIds: set[str]):
         """Update all RenderMaterials that use a TEV config not found in the given set."""
+
+    @abstractmethod
+    def processDepsgraphUpdate(self, update: bpy.types.DepsgraphUpdate):
+        """Update a RenderMaterial from a DepsgraphUpdate.
+        
+        (Update is only performed if the RenderMaterial already exists; new ones are not created)
+        """
 
 
 class StandardMaterialManager(MaterialManager[TextureManagerT]):
@@ -649,26 +637,8 @@ class StandardMaterialManager(MaterialManager[TextureManagerT]):
         try:
             return self._materials[mat.name]
         except KeyError:
-            self.updateMaterial(mat)
+            self._updateMaterial(mat)
             return self._materials[mat.name]
-
-    def updateMaterial(self, mat: bpy.types.Material):
-        if mat.name not in self._materials:
-            self._materials[mat.name] = RenderMaterial()
-        renderMat = self._materials[mat.name]
-        renderMat.update(mat)
-        shaderMat = renderMat.shaderMat
-        for tex in shaderMat.textures:
-            self._textureManager.updateTexture(tex)
-        if self._assumeOpaqueMats and not shaderMat.enableBlend:
-            shaderMat.enableConstAlpha = True
-            shaderMat.constAlpha = 1
-
-    def updateMaterialAnimation(self, mat: bpy.types.Material):
-        try:
-            self._materials[mat.name].updateAnimation(mat)
-        except KeyError:
-            pass
 
     def popInvalidMaterials(self):
         invalid: list[RenderMaterial] = []
@@ -689,9 +659,184 @@ class StandardMaterialManager(MaterialManager[TextureManagerT]):
             if blendMat.brres.tevID not in validIds:
                 shaderMat.update(blendMat)
 
+    def processDepsgraphUpdate(self, update: bpy.types.DepsgraphUpdate):
+        mat = update.id
+        if isinstance(mat, bpy.types.Material) and mat.name in self._materials:
+            if update.is_updated_shading and update.is_updated_geometry:
+                # this indicates some material property was changed by the user (not animation)
+                self._updateMaterial(mat)
+            else:
+                self._updateMaterialAnimation(mat)
 
-class ObjectManager(ABC):
-    pass
+    def _updateMaterial(self, mat: bpy.types.Material):
+        """Update the RenderMaterial for a Blender material, creating if nonexistent."""
+        if mat.name not in self._materials:
+            self._materials[mat.name] = RenderMaterial()
+        renderMat = self._materials[mat.name]
+        renderMat.update(mat)
+        shaderMat = renderMat.shaderMat
+        for tex in shaderMat.textures:
+            self._textureManager.updateTexture(tex)
+        if self._assumeOpaqueMats and not shaderMat.enableBlend:
+            shaderMat.enableConstAlpha = True
+            shaderMat.constAlpha = 1
+
+    def _updateMaterialAnimation(self, mat: bpy.types.Material):
+        """Update animation data for the RenderMaterial of a Blender material if it exists."""
+        try:
+            self._materials[mat.name].updateAnimation(mat)
+        except KeyError:
+            pass
+
+
+class RenderObject:
+
+    _EMPTY_UBO_BYTES = b"\x00" * ShaderMesh.getSize()
+
+    def __init__(self):
+        self.batches: dict[RenderMaterial, BatchInfo] = {}
+        self.drawPrio = 0
+        self.matrix: Matrix = Matrix.Identity(4)
+        self.usedAttrs: set[str] = set()
+        self.shaderMesh = ShaderMesh()
+        self.ubo = gpu.types.GPUUniformBuf(self._EMPTY_UBO_BYTES)
+
+
+class ObjectManager(Generic[MaterialManagerT]):
+
+    def __init__(self, materialManager: MaterialManagerT):
+        self._materialManager = materialManager
+        self._objects: dict[str, RenderObject] = {}
+        """Object for each object."""
+
+    def getDrawCalls(self):
+        """List of things drawn by this renderer.
+        
+        Each item has a RenderObject, RenderMaterial, and BatchInfo for drawing,
+        sorted as sorted on the Wii.
+        """
+        objects = reversed(self._objects.values())
+        drawCalls = [(o, m, b) for o in objects for m, b in o.batches.items()]
+        drawCalls.sort(key=lambda v: (
+            v[1] and v[1].shaderMat.isXlu,
+            v[0].drawPrio,
+            v[1].shaderMat.name if v[1] else ""
+        ))
+        return drawCalls
+
+    def addNewAndRemoveUnusedObjects(self, depsgraph: bpy.types.Depsgraph,
+                                     context: bpy.types.Context = None):
+        """Add new objects to this manager from depsgraph & context data, and remove RenderObjects
+        without corresponding Blender objects.
+        
+        Aside from potential removal, existing RenderObjects are not updated."""
+        visibleObjects = set(depsgraph.objects)
+        if context:
+            # determine which objects are visible
+            vl = context.view_layer
+            vp = context.space_data
+            visibleObjects = {
+                obj
+                for obj in visibleObjects
+                if obj.original.visible_get(view_layer=vl, viewport=vp)
+            }
+        names = {obj.name for obj in visibleObjects}
+        for obj in visibleObjects:
+            if obj.name not in self._objects:
+                self._updateObject(obj)
+        self._objects = {n: info for n, info in self._objects.items() if n in names}
+
+    def updateObjectsUsingMaterial(self, renderMat: RenderMaterial, depsgraph: bpy.types.Depsgraph):
+        """Update all objects in this manager that use some RenderMaterial."""
+        for blendObjName, renderObject in self._objects.items():
+            if renderMat in renderObject.batches:
+                self._updateObject(depsgraph.objects[blendObjName])
+
+    def processDepsgraphUpdate(self, update: bpy.types.DepsgraphUpdate):
+        """Update a RenderObject from a DepsgraphUpdate.
+        
+        (Update is only performed if the RenderObject already exists; new ones are not created)
+        """
+        obj = update.id
+        if isinstance(obj, bpy.types.Object) and obj.name in self._objects:
+            if update.is_updated_transform:
+                self._updateObjectMatrix(obj)
+            if update.is_updated_geometry:
+                self._updateObject(obj)
+
+    def _getBrresLayerNames(self, mesh: bpy.types.Mesh) -> tuple[list[str], list[str]]:
+        """Get the BRRES color & UV attribute names for a mesh."""
+        return (mesh.brres.meshAttrs.clrs, mesh.brres.meshAttrs.uvs)
+
+    def _updateObjectMatrix(self, obj: bpy.types.Object):
+        """Update a RenderObject's matrix from a Blender object.
+        
+        If the Blender object has no corresponding RenderObject, do nothing.
+        """
+        renderObject = self._objects.get(obj.name)
+        if renderObject:
+            renderObject.matrix = obj.matrix_world.copy()
+
+    def _updateObject(self, obj: bpy.types.Object):
+        """Update a RenderObject from a Blender object, or create if nonexistent.
+
+        If the Blender object has no mesh, add nothing and delete its RenderObject if it exists.
+        """
+        # get mesh (and delete if object has none and there's one in the cache)
+        try:
+            mesh: bpy.types.Mesh = obj.to_mesh()
+        except RuntimeError: # object doesn't have geometry (it's a camera, light, etc)
+            if obj.name in self._objects:
+                del self._objects[obj.name]
+            return
+        brres = obj.original.data.brres if obj.original.type == 'MESH' else None
+        # get object info/create if none exists
+        try:
+            renderObject = self._objects[obj.name]
+        except KeyError: # add object to cache if not in it yet
+            self._objects[obj.name] = renderObject = RenderObject()
+            self._updateObjectMatrix(obj)
+        # set draw priority
+        renderObject.drawPrio = brres.drawPrio if brres and brres.enableDrawPrio else 0
+        # calculate triangles & normals
+        mesh.calc_loop_triangles()
+        mesh.calc_normals_split()
+        # generate a batch for each material used
+        loopIdcs = foreachGet(mesh.loop_triangles, "loops", 3, np.uint32)
+        matLoopIdcs = np.zeros(loopIdcs.shape)
+        if len(mesh.materials) > 1: # lookup is wasteful if there's only one material
+            matLoopIdcs = getFaceMatIdcs(mesh)[getLoopFaceIdcs(mesh)][loopIdcs]
+        layerNames = self._getBrresLayerNames(mesh)
+        attrs = getLoopAttributeData(mesh, *layerNames)
+        renderObject.batches.clear()
+        noMat = np.full(loopIdcs.shape, len(mesh.materials) == 0) # all loops w/ no material
+        matSlotIdcs: dict[bpy.types.Material, list[int]] = {}
+        for i, mat in enumerate(mesh.materials):
+            # get matSlotIdcs to contain the indices used for each material
+            # (may be multiple if the same material shows up in multiple slots)
+            if mat in matSlotIdcs:
+                matSlotIdcs[mat].append(i)
+            else:
+                matSlotIdcs[mat] = [i]
+        if None in matSlotIdcs:
+            noMat = np.logical_or(noMat, np.isin(noMat, matSlotIdcs.pop(None)))
+        for mat, idcs in matSlotIdcs.items():
+            renderMat = self._materialManager.getMaterial(mat)
+            idcs = loopIdcs[np.isin(matLoopIdcs, idcs)]
+            renderObject.batches[renderMat] = BatchInfo('TRIS', attrs, idcs)
+        if np.any(noMat):
+            idcs = loopIdcs[noMat]
+            renderObject.batches[None] = BatchInfo('TRIS', attrs, idcs)
+        obj.to_mesh_clear()
+        # set constant vals for unprovided attributes (or -1 if provided)
+        # constant val is usually 0, except for previews, where colors get 1
+        usedAttrs = set(attrs)
+        if renderObject.usedAttrs != usedAttrs:
+            renderObject.usedAttrs = usedAttrs
+            m = renderObject.shaderMesh
+            m.colors = tuple(-1 if f"color{i}" in attrs else 1 for i in range(gx.MAX_CLR_ATTRS))
+            m.uvs = tuple(-1 if f"uv{i}" in attrs else 0 for i in range(gx.MAX_UV_ATTRS))
+            renderObject.ubo.update(m.pack())
 
 
 class TextureManager(ABC):
@@ -875,18 +1020,78 @@ class PreviewTextureManager(TextureManager):
         pass
 
 
+class BatchInfo:
+    """Data necessary to create a GPU batch, independent from a shader."""
+
+    def __init__(self, batchType: str, content: dict[str, np.ndarray], indices: np.ndarray):
+        self._batchType = batchType
+        self._content = content
+        self._indices = indices
+
+    def forShader(self, shader: gpu.types.GPUShader):
+        """Create a GPUBatch for a shader from this BatchInfo.
+
+        (Note: Faster than gpu_extras.batch.batch_for_shader(), as unused data isn't filled in)
+        """
+        # vboFormat = gpu.types.GPUVertFormat()
+        # attrInfo = {name: int(attrType[-1]) for name, attrType in shader.attrs_info_get()}
+        # for name, attrLen in attrInfo.items():
+        #     vboFormat.attr_add(id=name, comp_type='F32', len=attrLen, fetch_mode='FLOAT')
+        vboFormat = shader.format_calc()
+        vboLen = len(next(iter(self._content.values())))
+        vbo = gpu.types.GPUVertBuf(vboFormat, vboLen)
+        # for name, attrLen in attrInfo.items():
+        #     try:
+        #         data = content[name]
+        #     except KeyError:
+        #         data = np.empty((vboLen, attrLen))
+        #     vbo.attr_fill(name, data)
+        for name, data in self._content.items():
+            vbo.attr_fill(name, data)
+        ibo = gpu.types.GPUIndexBuf(type=self._batchType, seq=self._indices)
+        return gpu.types.GPUBatch(type=self._batchType, buf=vbo, elem=ibo)
+
+
+class BatchManager:
+
+    def __init__(self, shader: gpu.types.GPUShader):
+        self._shader = shader
+        self._batches: dict[BatchInfo, gpu.types.GPUBatch] = {}
+
+    def getBatch(self, batchInfo: BatchInfo):
+        """Get a batch for a BatchInfo, generating one if it doesn't yet exist in this manager."""
+        try:
+            return self._batches[batchInfo]
+        except KeyError:
+            batch = batchInfo.forShader(self._shader)
+            self._batches[batchInfo] = batch
+            return batch
+
+    def removeBatch(self, batchInfo: BatchInfo):
+        """Remove the batch for a BatchInfo from this manager. Do nothing if it doesn't exist."""
+        try:
+            del self._batches[batchInfo]
+        except KeyError:
+            pass
+
+
 class BrresRenderer(ABC, Generic[TextureManagerT]):
     """Renders a Blender BRRES scene."""
 
     def __init__(self):
         self.shader: gpu.types.GPUShader = None
-        self.objects: dict[str, ObjectInfo] = {}
         self._textureManager: TextureManagerT = None
         self._materialManager: MaterialManager[TextureManagerT] = None
+        self._objectManager: ObjectManager[StandardMaterialManager[TextureManagerT]] = None
+        self._batchManager: BatchManager = None
 
     @classmethod
     def _compileShader(cls) -> gpu.types.GPUShader:
-        """Compile & return the main BRRES shader."""
+        """Compile & return the main BRRES shader.
+        
+        (Must be called outside of init, or else there are issues w/ material previews, which are
+        my archnemesis at this point!!)
+        """
         shaderInfo = gpu.types.GPUShaderCreateInfo()
         # uniforms
         shaderInfo.typedef_source("".join(s.getSource() for s in RENDER_STRUCTS))
@@ -925,40 +1130,6 @@ class BrresRenderer(ABC, Generic[TextureManagerT]):
             shaderInfo.fragment_source(f.read())
         return gpu.shader.create_from_info(shaderInfo)
 
-    def _genBatch(self, batchType: str, content: dict[str, np.ndarray], indices: np.ndarray):
-        """Generate a GPUBatch for this renderer's shader. (Faster than batch_for_shader())"""
-        # vboFormat = gpu.types.GPUVertFormat()
-        # attrInfo = {name: int(attrType[-1]) for name, attrType in self.shader.attrs_info_get()}
-        # for name, attrLen in attrInfo.items():
-        #     vboFormat.attr_add(id=name, comp_type='F32', len=attrLen, fetch_mode='FLOAT')
-        vboFormat = self.shader.format_calc()
-        vboLen = len(next(iter(content.values())))
-        vbo = gpu.types.GPUVertBuf(vboFormat, vboLen)
-        # for name, attrLen in attrInfo.items():
-        #     try:
-        #         data = content[name]
-        #     except KeyError:
-        #         data = np.empty((vboLen, attrLen))
-        #     vbo.attr_fill(name, data)
-        for name, data in content.items():
-            vbo.attr_fill(name, data)
-        ibo = gpu.types.GPUIndexBuf(type=batchType, seq=indices)
-        return gpu.types.GPUBatch(type=batchType, buf=vbo, elem=ibo)
-
-    def _getDrawCalls(self):
-        """List of things drawn by this renderer.
-        
-        Each item has an object info, material, and batch for drawing, sorted as sorted on hardware.
-        """
-        objects = reversed(self.objects.values())
-        drawCalls = [(o, m, b) for o in objects for m, b in o.batches.items()]
-        drawCalls.sort(key=lambda v: (
-            v[1] and v[1].shaderMat.isXlu,
-            v[0].drawPrio,
-            v[1].shaderMat.name if v[1] else ""
-        ))
-        return drawCalls
-
     def _getBrresLayerNames(self, mesh: bpy.types.Mesh) -> tuple[list[str], list[str]]:
         """Get the BRRES color & UV attribute names for a mesh."""
         return (mesh.brres.meshAttrs.clrs, mesh.brres.meshAttrs.uvs)
@@ -967,125 +1138,31 @@ class BrresRenderer(ABC, Generic[TextureManagerT]):
         """Clean up resources managed by this renderer."""
         self._textureManager.delete()
 
-    def _updateMeshCache(self, obj: bpy.types.Object, depsgraph: bpy.types.Depsgraph):
-        """Update an object's mesh in the rendering cache, or add it if the object's not there yet.
-
-        If the object has no mesh, delete it (or don't add it).
-
-        Also, if the object uses any materials that aren't in the cache yet, add them to it (but
-        don't update existing ones).
-        """
-        # get mesh (and delete if object has none and there's one in the cache)
-        try:
-            mesh: bpy.types.Mesh = obj.to_mesh()
-        except RuntimeError: # object doesn't have geometry (it's a camera, light, etc)
-            if obj.name in self.objects:
-                del self.objects[obj.name]
-            return
-        brres = obj.original.data.brres if obj.original.type == 'MESH' else None
-        # get object info/create if none exists
-        try:
-            objInfo = self.objects[obj.name]
-        except KeyError: # add object to cache if not in it yet
-            self.objects[obj.name] = objInfo = ObjectInfo()
-            self._updateObjMtxCache(obj)
-        # set draw priority
-        objInfo.drawPrio = brres.drawPrio if brres and brres.enableDrawPrio else 0
-        # calculate triangles & normals
-        mesh.calc_loop_triangles()
-        mesh.calc_normals_split()
-        # generate a batch for each material used
-        loopIdcs = foreachGet(mesh.loop_triangles, "loops", 3, np.uint32)
-        matLoopIdcs = np.zeros(loopIdcs.shape)
-        if len(mesh.materials) > 1: # lookup is wasteful if there's only one material
-            matLoopIdcs = getFaceMatIdcs(mesh)[getLoopFaceIdcs(mesh)][loopIdcs]
-        layerNames = self._getBrresLayerNames(mesh)
-        attrs = getLoopAttributeData(mesh, *layerNames)
-        objInfo.batches.clear()
-        noMat = np.full(loopIdcs.shape, len(mesh.materials) == 0) # all loops w/ no material
-        matSlotIdcs: dict[bpy.types.Material, list[int]] = {}
-        for i, mat in enumerate(mesh.materials):
-            # get matSlotIdcs to contain the indices used for each material
-            # (may be multiple if the same material shows up in multiple slots)
-            if mat in matSlotIdcs:
-                matSlotIdcs[mat].append(i)
-            else:
-                matSlotIdcs[mat] = [i]
-        if None in matSlotIdcs:
-            noMat = np.logical_or(noMat, np.isin(noMat, matSlotIdcs.pop(None)))
-        for mat, idcs in matSlotIdcs.items():
-            renderMat = self._materialManager.getMaterial(mat)
-            idcs = loopIdcs[np.isin(matLoopIdcs, idcs)]
-            objInfo.batches[renderMat] = self._genBatch('TRIS', attrs, idcs)
-        if np.any(noMat):
-            idcs = loopIdcs[noMat]
-            objInfo.batches[None] = self._genBatch('TRIS', attrs, idcs)
-        obj.to_mesh_clear()
-        # set constant vals for unprovided attributes (or -1 if provided)
-        # constant val is usually 0, except for previews, where colors get 1
-        usedAttrs = set(attrs)
-        if objInfo.usedAttrs != usedAttrs:
-            objInfo.usedAttrs = usedAttrs
-            m = objInfo.mesh
-            m.colors = tuple(-1 if f"color{i}" in attrs else 1 for i in range(gx.MAX_CLR_ATTRS))
-            m.uvs = tuple(-1 if f"uv{i}" in attrs else 0 for i in range(gx.MAX_UV_ATTRS))
-            objInfo.ubo.update(m.pack())
-        return objInfo
-
-    def _updateObjMtxCache(self, obj: bpy.types.Object):
-        """Update an object's matrix in the rendering cache. Do nothing if object's not present."""
-        objInfo = self.objects.get(obj.name)
-        if objInfo:
-            objInfo.matrix = obj.matrix_world.copy()
-
     def update(self, depsgraph: bpy.types.Depsgraph, context: bpy.types.Context = None):
         """Update this renderer's settings from a Blender depsgraph & optional context.
 
         If no context is provided, then the settings will be updated for new & deleted Blender
         objects, but changes to existing ones will be ignored.
         """
-        # shader has to be compiled in drawing context or something so do that here instead of init
-        # (otherwise there are issues w/ material previews, which are my archnemesis at this point)
-        if self.shader is None:
+        if not self.shader:
             self.shader = self._compileShader()
-        # remove deleted stuff
-        visObjs = set(depsgraph.objects)
-        if context:
-            # determine which objects are visible
-            vl = context.view_layer
-            vp = context.space_data
-            visObjs = {ob for ob in visObjs if ob.original.visible_get(view_layer=vl, viewport=vp)}
-        names = {obj.name for obj in visObjs}
-        self.objects = {n: info for n, info in self.objects.items() if n in names}
+            self._batchManager = BatchManager(self.shader)
+        # remove deleted stuff & add new stuff
+        self._objectManager.addNewAndRemoveUnusedObjects(depsgraph, context)
         isMatUpdate = depsgraph.id_type_updated('MATERIAL')
         if isMatUpdate:
-            # if material has been deleted (or renamed), remove it & regenerate objects that used it
+            # for all deleted (or renamed) materials, remove them & regenerate relevant objects
             for renderMat in self._materialManager.popInvalidMaterials():
-                for objName, objInfo in self.objects.items():
-                    if renderMat in objInfo.batches:
-                        self._updateMeshCache(depsgraph.objects[objName], depsgraph)
-        # add new stuff
-        for obj in visObjs:
-            if obj.name not in self.objects:
-                self._updateMeshCache(obj, depsgraph)
+                self._objectManager.updateObjectsUsingMaterial(renderMat, depsgraph)
         # update modified stuff
         tevConfigs = context.scene.brres.tevConfigs if context else ()
         validTevIds = {t.uuid for t in tevConfigs} | {""} # for tev config deletion detection
         for update in depsgraph.updates:
             updateId = update.id
             if isinstance(updateId, bpy.types.Object):
-                if updateId.name in self.objects:
-                    # check above ensures hidden things that are updated stay hidden
-                    if update.is_updated_transform:
-                        self._updateObjMtxCache(updateId)
-                    if update.is_updated_geometry:
-                        self._updateMeshCache(updateId, depsgraph)
+                self._objectManager.processDepsgraphUpdate(update)
             elif isinstance(updateId, bpy.types.Material):
-                if update.is_updated_shading and update.is_updated_geometry:
-                    # this indicates some material property was changed by the user (not animation)
-                    self._materialManager.updateMaterial(updateId)
-                else:
-                    self._materialManager.updateMaterialAnimation(updateId)
+                self._materialManager.processDepsgraphUpdate(update)
             elif isinstance(updateId, bpy.types.Image):
                 # material updates can sometimes trigger image updates for some reason,
                 # so make sure this is an actual image update
@@ -1112,13 +1189,14 @@ class BrresRenderer(ABC, Generic[TextureManagerT]):
     def draw(self, projectionMtx: Matrix, viewMtx: Matrix):
         """Draw the current BRRES scene to the active framebuffer."""
         self.preDraw()
-        for (objInfo, renderMat, batch) in self._getDrawCalls():
-            self.processDrawCall(viewMtx, projectionMtx, objInfo, renderMat, batch)
+        for (renderObject, renderMat, batchInfo) in self._objectManager.getDrawCalls():
+            batch = self._batchManager.getBatch(batchInfo)
+            self.processDrawCall(viewMtx, projectionMtx, renderObject, renderMat, batch)
         self.postDraw()
         self._textureManager.removeUnused()
 
     @abstractmethod
-    def processDrawCall(self, viewMtx: Matrix, projectionMtx: Matrix, objInfo: ObjectInfo,
+    def processDrawCall(self, viewMtx: Matrix, projectionMtx: Matrix, renderObject: RenderObject,
                         renderMat: RenderMaterial, batch: gpu.types.GPUBatch):
         """Draw something represented by a "draw call" (object/material/batch tuple)."""
 
@@ -1139,6 +1217,7 @@ class BrresBglRenderer(BrresRenderer[BglTextureManager]):
         self._noTransparentOverwrite = noTransparentOverwrite
         self._textureManager = BglTextureManager()
         self._materialManager = StandardMaterialManager(self._textureManager, assumeOpaqueMats)
+        self._objectManager = ObjectManager(self._materialManager)
 
     def preDraw(self):
         self.shader.bind()
@@ -1150,13 +1229,13 @@ class BrresBglRenderer(BrresRenderer[BglTextureManager]):
         bgl.glStencilFunc(bgl.GL_ALWAYS, True, 0xFF)
         bgl.glStencilOp(bgl.GL_REPLACE, bgl.GL_REPLACE, bgl.GL_REPLACE)
 
-    def processDrawCall(self, viewMtx: Matrix, projectionMtx: Matrix, objInfo: ObjectInfo,
+    def processDrawCall(self, viewMtx: Matrix, projectionMtx: Matrix, renderObject: RenderObject,
                         renderMat: RenderMaterial, batch: gpu.types.GPUBatch):
-        mvMtx = viewMtx @ objInfo.matrix
+        mvMtx = viewMtx @ renderObject.matrix
         self.shader.uniform_bool("isConstAlphaWrite", [False])
         self.shader.uniform_float("modelViewProjectionMtx", projectionMtx @ mvMtx)
         self.shader.uniform_float("normalMtx", mvMtx.to_3x3().inverted_safe().transposed())
-        self.shader.uniform_block("mesh", objInfo.ubo)
+        self.shader.uniform_block("mesh", renderObject.ubo)
         # load material data
         if renderMat:
             self.shader.uniform_block("material", renderMat.ubo)
@@ -1268,6 +1347,7 @@ class BrresPreviewRenderer(BrresRenderer[PreviewTextureManager]):
         super().__init__()
         self._textureManager = PreviewTextureManager()
         self._materialManager = StandardMaterialManager(self._textureManager)
+        self._objectManager = ObjectManager(self._materialManager)
 
     def _getBrresLayerNames(self, mesh: bpy.types.Mesh):
         return (["Col"] * gx.MAX_CLR_ATTRS, ["UVMap"] * gx.MAX_UV_ATTRS)
@@ -1279,13 +1359,13 @@ class BrresPreviewRenderer(BrresRenderer[PreviewTextureManager]):
         # also force drawn alpha values to be 1, since blending gets weird
         self.shader.uniform_bool("forceOpaque", [True])
 
-    def processDrawCall(self, viewMtx: Matrix, projectionMtx: Matrix, objInfo: ObjectInfo,
+    def processDrawCall(self, viewMtx: Matrix, projectionMtx: Matrix, renderObject: RenderObject,
                         renderMat: RenderMaterial, batch: gpu.types.GPUBatch):
-        mvMtx = viewMtx @ objInfo.matrix
+        mvMtx = viewMtx @ renderObject.matrix
         self.shader.uniform_bool("isConstAlphaWrite", [False])
         self.shader.uniform_float("modelViewProjectionMtx", projectionMtx @ mvMtx)
         self.shader.uniform_float("normalMtx", mvMtx.to_3x3().inverted_safe().transposed())
-        self.shader.uniform_block("mesh", objInfo.ubo)
+        self.shader.uniform_block("mesh", renderObject.ubo)
         # load material data
         if renderMat:
             self.shader.uniform_block("material", renderMat.ubo)
