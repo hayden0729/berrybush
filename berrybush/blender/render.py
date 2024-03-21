@@ -1,6 +1,5 @@
 # standard imports
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 import pathlib
 from typing import Generic, TypeVar
 # 3rd party imports
@@ -481,6 +480,187 @@ RENDER_STRUCTS = (
 )
 
 
+class TextureManager(ABC):
+
+    @abstractmethod
+    def updateTexture(self, tex: ShaderTexture):
+        """Update the data corresponding to a texture, creating if nonexistent."""
+
+    @abstractmethod
+    def updateTexturesUsingImage(self, img: bpy.types.Image):
+        """Update the data corresponding to all textures that use some image."""
+
+    @abstractmethod
+    def removeUnused(self):
+        """Free texture resources not used since the last call to this method."""
+
+    @abstractmethod
+    def delete(self):
+        """Clean up resources used by this TextureManager that must be freed."""
+
+
+class BglTextureManager(TextureManager):
+
+    def __init__(self):
+        super().__init__()
+        self._textures: dict[ShaderTexture, tuple[int, int]] = {}
+        """OpenGL bindcode & mipmap count for each texture."""
+        self._images: dict[str, list[bgl.Buffer]] = {}
+        """Data buffer for each mipmap of each image (original included)."""
+        self._usedTextures: set[ShaderTexture] = set()
+        """Set of textures bound since the last removeUnused() call."""
+
+    def _getImage(self, img: bpy.types.Image):
+        """Get the data buffers corresponding to an image, updating if nonexistent."""
+        try:
+            return self._images[img.name]
+        except KeyError:
+            self._updateImage(img)
+            return self._images[img.name]
+
+    def _updateImage(self, img: bpy.types.Image):
+        """Update the data buffers corresponding to an image."""
+        imgFmt = BlendImageExtractor.getFormat(img)
+        px = BlendImageExtractor.getRgba(img, setLargeToBlack=True)
+        adjusted = imgFmt.adjustImg(px).astype(np.float32) # can't be float64 for bgl
+        flattened = adjusted.flatten()
+        mainPxBuffer = bgl.Buffer(bgl.GL_FLOAT, len(flattened), flattened)
+        pxBuffers = [mainPxBuffer]
+        self._images[img.name] = pxBuffers
+        dims = np.array(px.shape[:2][::-1], dtype=np.integer)
+        if not np.all(dims == BlendImageExtractor.getDims(img, setLargeToBlack=True)):
+            print(img.name, dims, BlendImageExtractor.getDims(img, setLargeToBlack=True))
+        # load mipmaps if provided
+        for mm in img.brres.mipmaps:
+            dims //= 2
+            mmPx = BlendImageExtractor.getRgbaWithDims(mm.img, dims)
+            mmPx = imgFmt.adjustImg(mmPx).astype(np.float32).flatten()
+            mmPxBuffer = bgl.Buffer(bgl.GL_FLOAT, len(mmPx), mmPx)
+            pxBuffers.append(mmPxBuffer)
+
+    def _getTexture(self, tex: ShaderTexture):
+        """Get the bindcode and mipmap count for a texture, updating if nonexistent."""
+        try:
+            return self._textures[tex]
+        except KeyError:
+            self.updateTexture(tex)
+            return self._textures[tex]
+
+    def updateTexture(self, tex: ShaderTexture):
+        if not tex.hasImg:
+            return
+        img = bpy.data.images[tex.imgName]
+        bindcodeBuf = bgl.Buffer(bgl.GL_INT, 1)
+        bgl.glGenTextures(1, bindcodeBuf)
+        bindcode = bindcodeBuf[0] # pylint: disable=unsubscriptable-object
+        self._textures[tex] = (bindcode, len(img.brres.mipmaps))
+        bgl.glBindTexture(bgl.GL_TEXTURE_2D, bindcode)
+        imgBuffers = self._getImage(img)
+        fmt = bgl.GL_RGBA
+        dims = BlendImageExtractor.getDims(img, setLargeToBlack=True)
+        for i, b in enumerate(imgBuffers):
+            bgl.glTexImage2D(bgl.GL_TEXTURE_2D, i, fmt, *dims, 0, fmt, bgl.GL_FLOAT, b)
+            dims //= 2
+
+    def updateTexturesUsingImage(self, img: Image):
+        if img.name in self._images:
+            self._updateImage(img)
+            name = img.name
+            for tex in self._textures:
+                if tex.imgName == name:
+                    self.updateTexture(tex)
+
+    def removeUnused(self):
+        unusedBindcodes: list[int] = []
+        for texture in tuple(self._textures): # tuple() so removal doesn't mess w/ iteration
+            if texture not in self._usedTextures:
+                bindcode, numMipmaps = self._textures.pop(texture)
+                unusedBindcodes.append(bindcode)
+        deleteBglTextures(unusedBindcodes)
+        self._usedTextures.clear()
+
+    def delete(self):
+        bindcodes = [bindcode for (bindcode, numMipmaps) in self._textures.values()]
+        deleteBglTextures(bindcodes)
+
+    def bindTexture(self, texture: ShaderTexture):
+        """Bind a texture in the OpenGL state."""
+        self._usedTextures.add(texture)
+        bindcode, mipmapLevels = self._getTexture(texture)
+        bgl.glBindTexture(bgl.GL_TEXTURE_2D, bindcode)
+        bgl.glTexParameteri(bgl.GL_TEXTURE_2D, bgl.GL_TEXTURE_WRAP_S, texture.wrap[0])
+        bgl.glTexParameteri(bgl.GL_TEXTURE_2D, bgl.GL_TEXTURE_WRAP_T, texture.wrap[1])
+        bgl.glTexParameteri(bgl.GL_TEXTURE_2D, bgl.GL_TEXTURE_MIN_FILTER, texture.filter[0])
+        bgl.glTexParameteri(bgl.GL_TEXTURE_2D, bgl.GL_TEXTURE_MAG_FILTER, texture.filter[1])
+        bgl.glTexParameterf(bgl.GL_TEXTURE_2D, bgl.GL_TEXTURE_LOD_BIAS, texture.lodBias)
+        bgl.glTexParameteri(bgl.GL_TEXTURE_2D, bgl.GL_TEXTURE_MAX_LEVEL, mipmapLevels)
+
+
+class PreviewTextureManager(TextureManager):
+
+    def __init__(self):
+        super().__init__()
+        self._textures: dict[ShaderTexture, gpu.types.GPUTexture] = {}
+        """GPUTexture for each texture."""
+        self._images: dict[str, gpu.types.Buffer] = {}
+        """GPU data buffer for each image."""
+        self._usedTextures: set[ShaderTexture] = set()
+        """Set of textures bound since the last removeUnused() call."""
+
+    def _getImage(self, img: bpy.types.Image):
+        """Get the GPU data buffer corresponding to an image, updating if nonexistent."""
+        try:
+            return self._images[img.name]
+        except KeyError:
+            self._updateImage(img)
+            return self._images[img.name]
+
+    def _updateImage(self, img: bpy.types.Image):
+        """Update the GPU data buffer corresponding to an image."""
+        px = BlendImageExtractor.getRgba(img, setLargeToBlack=True)
+        # convert to float32 since float64 (default) is not allowed for 32-bit float buffer
+        adjusted = BlendImageExtractor.getFormat(img).adjustImg(px).astype(np.float32)
+        flattened = adjusted.flatten()
+        self._images[img.name] = gpu.types.Buffer('FLOAT', len(flattened), flattened)
+
+    def getTexture(self, tex: ShaderTexture):
+        """Get the GPUTexture corresponding to a texture, updating if nonexistent."""
+        self._usedTextures.add(tex)
+        try:
+            return self._textures[tex]
+        except KeyError:
+            self.updateTexture(tex)
+            return self._textures[tex]
+
+    def updateTexture(self, tex: ShaderTexture):
+        if not tex.hasImg:
+            return
+        img: bpy.types.Image = bpy.data.images[tex.imgName]
+        pxBuf = self._getImage(img)
+        fmt = 'RGBA32F'
+        dims = BlendImageExtractor.getDims(img, setLargeToBlack=True)
+        self._textures[tex] = gpu.types.GPUTexture(dims, format=fmt, data=pxBuf)
+
+    def updateTexturesUsingImage(self, img: Image):
+        if img.name in self._images:
+            self._updateImage(img)
+            name = img.name
+            for tex in self._textures:
+                if tex.imgName == name:
+                    self.updateTexture(tex)
+
+    def removeUnused(self):
+        self._textures = {
+            renderTex: gpuTex
+            for renderTex, gpuTex in self._textures.items()
+            if renderTex in self._usedTextures
+        }
+        self._usedTextures.clear()
+
+    def delete(self):
+        pass
+
+
 class RenderMaterial:
     """Maintains a ShaderMaterial and UBO holding its data."""
 
@@ -837,187 +1017,6 @@ class ObjectManager(Generic[MaterialManagerT]):
             m.colors = tuple(-1 if f"color{i}" in attrs else 1 for i in range(gx.MAX_CLR_ATTRS))
             m.uvs = tuple(-1 if f"uv{i}" in attrs else 0 for i in range(gx.MAX_UV_ATTRS))
             renderObject.ubo.update(m.pack())
-
-
-class TextureManager(ABC):
-
-    @abstractmethod
-    def updateTexture(self, tex: ShaderTexture):
-        """Update the data corresponding to a texture, creating if nonexistent."""
-
-    @abstractmethod
-    def updateTexturesUsingImage(self, img: bpy.types.Image):
-        """Update the data corresponding to all textures that use some image."""
-
-    @abstractmethod
-    def removeUnused(self):
-        """Free texture resources not used since the last call to this method."""
-
-    @abstractmethod
-    def delete(self):
-        """Clean up resources used by this TextureManager that must be freed."""
-
-
-class BglTextureManager(TextureManager):
-
-    def __init__(self):
-        super().__init__()
-        self._textures: dict[ShaderTexture, tuple[int, int]] = {}
-        """OpenGL bindcode & mipmap count for each texture."""
-        self._images: dict[str, list[bgl.Buffer]] = {}
-        """Data buffer for each mipmap of each image (original included)."""
-        self._usedTextures: set[ShaderTexture] = set()
-        """Set of textures bound since the last removeUnused() call."""
-
-    def _getImage(self, img: bpy.types.Image):
-        """Get the data buffers corresponding to an image, updating if nonexistent."""
-        try:
-            return self._images[img.name]
-        except KeyError:
-            self._updateImage(img)
-            return self._images[img.name]
-
-    def _updateImage(self, img: bpy.types.Image):
-        """Update the data buffers corresponding to an image."""
-        imgFmt = BlendImageExtractor.getFormat(img)
-        px = BlendImageExtractor.getRgba(img, setLargeToBlack=True)
-        adjusted = imgFmt.adjustImg(px).astype(np.float32) # can't be float64 for bgl
-        flattened = adjusted.flatten()
-        mainPxBuffer = bgl.Buffer(bgl.GL_FLOAT, len(flattened), flattened)
-        pxBuffers = [mainPxBuffer]
-        self._images[img.name] = pxBuffers
-        dims = np.array(px.shape[:2][::-1], dtype=np.integer)
-        if not np.all(dims == BlendImageExtractor.getDims(img, setLargeToBlack=True)):
-            print(img.name, dims, BlendImageExtractor.getDims(img, setLargeToBlack=True))
-        # load mipmaps if provided
-        for mm in img.brres.mipmaps:
-            dims //= 2
-            mmPx = BlendImageExtractor.getRgbaWithDims(mm.img, dims)
-            mmPx = imgFmt.adjustImg(mmPx).astype(np.float32).flatten()
-            mmPxBuffer = bgl.Buffer(bgl.GL_FLOAT, len(mmPx), mmPx)
-            pxBuffers.append(mmPxBuffer)
-
-    def _getTexture(self, tex: ShaderTexture):
-        """Get the bindcode and mipmap count for a texture, updating if nonexistent."""
-        try:
-            return self._textures[tex]
-        except KeyError:
-            self.updateTexture(tex)
-            return self._textures[tex]
-
-    def updateTexture(self, tex: ShaderTexture):
-        if not tex.hasImg:
-            return
-        img = bpy.data.images[tex.imgName]
-        bindcodeBuf = bgl.Buffer(bgl.GL_INT, 1)
-        bgl.glGenTextures(1, bindcodeBuf)
-        bindcode = bindcodeBuf[0] # pylint: disable=unsubscriptable-object
-        self._textures[tex] = (bindcode, len(img.brres.mipmaps))
-        bgl.glBindTexture(bgl.GL_TEXTURE_2D, bindcode)
-        imgBuffers = self._getImage(img)
-        fmt = bgl.GL_RGBA
-        dims = BlendImageExtractor.getDims(img, setLargeToBlack=True)
-        for i, b in enumerate(imgBuffers):
-            bgl.glTexImage2D(bgl.GL_TEXTURE_2D, i, fmt, *dims, 0, fmt, bgl.GL_FLOAT, b)
-            dims //= 2
-
-    def updateTexturesUsingImage(self, img: Image):
-        if img.name in self._images:
-            self._updateImage(img)
-            name = img.name
-            for tex in self._textures:
-                if tex.imgName == name:
-                    self.updateTexture(tex)
-
-    def removeUnused(self):
-        unusedBindcodes: list[int] = []
-        for texture in tuple(self._textures): # tuple() so removal doesn't mess w/ iteration
-            if texture not in self._usedTextures:
-                bindcode, numMipmaps = self._textures.pop(texture)
-                unusedBindcodes.append(bindcode)
-        deleteBglTextures(unusedBindcodes)
-        self._usedTextures.clear()
-
-    def delete(self):
-        bindcodes = [bindcode for (bindcode, numMipmaps) in self._textures.values()]
-        deleteBglTextures(bindcodes)
-
-    def bindTexture(self, texture: ShaderTexture):
-        """Bind a texture in the OpenGL state."""
-        self._usedTextures.add(texture)
-        bindcode, mipmapLevels = self._getTexture(texture)
-        bgl.glBindTexture(bgl.GL_TEXTURE_2D, bindcode)
-        bgl.glTexParameteri(bgl.GL_TEXTURE_2D, bgl.GL_TEXTURE_WRAP_S, texture.wrap[0])
-        bgl.glTexParameteri(bgl.GL_TEXTURE_2D, bgl.GL_TEXTURE_WRAP_T, texture.wrap[1])
-        bgl.glTexParameteri(bgl.GL_TEXTURE_2D, bgl.GL_TEXTURE_MIN_FILTER, texture.filter[0])
-        bgl.glTexParameteri(bgl.GL_TEXTURE_2D, bgl.GL_TEXTURE_MAG_FILTER, texture.filter[1])
-        bgl.glTexParameterf(bgl.GL_TEXTURE_2D, bgl.GL_TEXTURE_LOD_BIAS, texture.lodBias)
-        bgl.glTexParameteri(bgl.GL_TEXTURE_2D, bgl.GL_TEXTURE_MAX_LEVEL, mipmapLevels)
-
-
-class PreviewTextureManager(TextureManager):
-
-    def __init__(self):
-        super().__init__()
-        self._textures: dict[ShaderTexture, gpu.types.GPUTexture] = {}
-        """GPUTexture for each texture."""
-        self._images: dict[str, gpu.types.Buffer] = {}
-        """GPU data buffer for each image."""
-        self._usedTextures: set[ShaderTexture] = set()
-        """Set of textures bound since the last removeUnused() call."""
-
-    def _getImage(self, img: bpy.types.Image):
-        """Get the GPU data buffer corresponding to an image, updating if nonexistent."""
-        try:
-            return self._images[img.name]
-        except KeyError:
-            self._updateImage(img)
-            return self._images[img.name]
-
-    def _updateImage(self, img: bpy.types.Image):
-        """Update the GPU data buffer corresponding to an image."""
-        px = BlendImageExtractor.getRgba(img, setLargeToBlack=True)
-        # convert to float32 since float64 (default) is not allowed for 32-bit float buffer
-        adjusted = BlendImageExtractor.getFormat(img).adjustImg(px).astype(np.float32)
-        flattened = adjusted.flatten()
-        self._images[img.name] = gpu.types.Buffer('FLOAT', len(flattened), flattened)
-
-    def getTexture(self, tex: ShaderTexture):
-        """Get the GPUTexture corresponding to a texture, updating if nonexistent."""
-        self._usedTextures.add(tex)
-        try:
-            return self._textures[tex]
-        except KeyError:
-            self.updateTexture(tex)
-            return self._textures[tex]
-
-    def updateTexture(self, tex: ShaderTexture):
-        if not tex.hasImg:
-            return
-        img: bpy.types.Image = bpy.data.images[tex.imgName]
-        pxBuf = self._getImage(img)
-        fmt = 'RGBA32F'
-        dims = BlendImageExtractor.getDims(img, setLargeToBlack=True)
-        self._textures[tex] = gpu.types.GPUTexture(dims, format=fmt, data=pxBuf)
-
-    def updateTexturesUsingImage(self, img: Image):
-        if img.name in self._images:
-            self._updateImage(img)
-            name = img.name
-            for tex in self._textures:
-                if tex.imgName == name:
-                    self.updateTexture(tex)
-
-    def removeUnused(self):
-        self._textures = {
-            renderTex: gpuTex
-            for renderTex, gpuTex in self._textures.items()
-            if renderTex in self._usedTextures
-        }
-        self._usedTextures.clear()
-
-    def delete(self):
-        pass
 
 
 class BatchInfo:
