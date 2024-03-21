@@ -878,11 +878,15 @@ class RenderObject:
 
     def __init__(self):
         self.batches: dict[RenderMaterial, BatchInfo] = {}
-        self.drawPrio = 0
+        self.drawPriority = 0
         self.matrix: Matrix = Matrix.Identity(4)
         self.usedAttrs: set[str] = set()
         self.shaderMesh = ShaderMesh()
         self.ubo = gpu.types.GPUUniformBuf(self._EMPTY_UBO_BYTES)
+
+    def updateMatrix(self, obj: bpy.types.Object):
+        """Set this RenderObject's model matrix from a Blender object."""
+        self.matrix = obj.matrix_world.copy()
 
 
 class ObjectManager(Generic[MaterialManagerT]):
@@ -943,22 +947,13 @@ class ObjectManager(Generic[MaterialManagerT]):
         obj = update.id
         if isinstance(obj, bpy.types.Object) and obj.name in self._objects:
             if update.is_updated_transform:
-                self._updateObjectMatrix(obj)
+                self._objects[obj.name].updateMatrix(obj)
             if update.is_updated_geometry:
                 self._updateObject(obj)
 
     def _getBrresLayerNames(self, mesh: bpy.types.Mesh) -> tuple[list[str], list[str]]:
         """Get the BRRES color & UV attribute names for a mesh."""
         return (mesh.brres.meshAttrs.clrs, mesh.brres.meshAttrs.uvs)
-
-    def _updateObjectMatrix(self, obj: bpy.types.Object):
-        """Update a RenderObject's matrix from a Blender object.
-        
-        If the Blender object has no corresponding RenderObject, do nothing.
-        """
-        renderObject = self._objects.get(obj.name)
-        if renderObject:
-            renderObject.matrix = obj.matrix_world.copy()
 
     def _updateObject(self, obj: bpy.types.Object):
         """Update a RenderObject from a Blender object, or create if nonexistent.
@@ -972,16 +967,16 @@ class ObjectManager(Generic[MaterialManagerT]):
             if obj.name in self._objects:
                 del self._objects[obj.name]
             return
-        brres = obj.original.data.brres if obj.original.type == 'MESH' else None
         # get object info/create if none exists
         try:
             renderObject = self._objects[obj.name]
-        except KeyError: # add object to cache if not in it yet
+        except KeyError:
             self._objects[obj.name] = renderObject = RenderObject()
-            self._updateObjectMatrix(obj)
+            renderObject.updateMatrix(obj)
         # set draw priority
-        renderObject.drawPrio = brres.drawPrio if brres and brres.enableDrawPrio else 0
-        # calculate triangles & normals
+        brres = obj.original.data.brres if obj.original.type == 'MESH' else None
+        renderObject.drawPriority = brres.drawPriority if brres and brres.enableDrawPrio else 0
+        # prepare mesh
         mesh.calc_loop_triangles()
         mesh.calc_normals_split()
         # generate a batch for each material used
@@ -1010,7 +1005,6 @@ class ObjectManager(Generic[MaterialManagerT]):
         if np.any(noMat):
             idcs = loopIdcs[noMat]
             renderObject.batches[None] = BatchInfo('TRIS', attrs, idcs)
-        obj.to_mesh_clear()
         # set constant vals for unprovided attributes (or -1 if provided)
         # constant val is usually 0, except for previews, where colors get 1
         usedAttrs = set(attrs)
@@ -1020,6 +1014,7 @@ class ObjectManager(Generic[MaterialManagerT]):
             m.colors = tuple(-1 if f"color{i}" in attrs else 1 for i in range(gx.MAX_CLR_ATTRS))
             m.uvs = tuple(-1 if f"uv{i}" in attrs else 0 for i in range(gx.MAX_UV_ATTRS))
             renderObject.ubo.update(m.pack())
+        obj.to_mesh_clear()
 
 
 class BatchInfo:
