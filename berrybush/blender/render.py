@@ -1424,7 +1424,7 @@ class BerryBushRenderEngine(bpy.types.RenderEngine):
         """Maps scene names to their BRRES renderers."""
         self.isViewport = True
         """Whether a viewport render is being rendered."""
-        self._backgroundColor = (0, 0, 0)
+        self._backgroundColor: tuple[float, float, float] = None
         # shader & batch
         verts = {"position": [[-1, -1], [1, -1], [-1, 1], [1, 1]]}
         idcs = [[0, 1, 2], [3, 2, 1]]
@@ -1558,14 +1558,47 @@ class BerryBushRenderEngine(bpy.types.RenderEngine):
         # pass 2: post-processing
         self.shader.bind()
         self.shader.uniform_sampler("tex", self.offscreen.texture_color)
-        self.shader.uniform_bool("doAlpha", [True])
+        self.shader.uniform_bool("doAlpha", [self._isPreviewWithoutFloor(scene.objects)])
         self.batch.draw(self.shader)
+
+    def _isPreviewWithoutFloor(self, objects: dict[str, bpy.types.Object]):
+        """Determine if a material preview with a floor is being rendered.
+        
+        (Such previews have transparency, unlike those with floors, so the cases must be treated
+        specially)
+        """
+        if self.is_preview:
+            try:
+                # this check is done this way because for material previews w/o floors,
+                # there's actually still a Floor object - its material is just called FloorHidden
+                return "Floor" not in objects["Floor"].data.materials
+            except KeyError:
+                return True
+        return False
+
+    def _updateBackgroundColor(self, depsgraph: bpy.types.Depsgraph):
+        """Update this render engine's background color from a depsgraph."""
+        if depsgraph.id_type_updated('WORLD') or self._backgroundColor is None:
+            # either world color or pitch black is used for background
+            # black is used in 2 cases:
+            # - transparent final renders
+            # - material previews w/o floors
+            # side note, world color is used in the remaining cases:
+            # - viewport renders
+            # - non-transparent final renders
+            # - material previews w/ non-hidden floors
+            isTransparentFinal = depsgraph.scene.render.film_transparent and not self.isViewport
+            if isTransparentFinal or self._isPreviewWithoutFloor(depsgraph.objects):
+                self._backgroundColor = (0, 0, 0)
+            else:
+                self._backgroundColor = np.array(depsgraph.scene.world.color[:3]) ** .4545
 
     def render(self, depsgraph: bpy.types.Depsgraph):
         self.isViewport = False
         scene = depsgraph.scene
         render = scene.render
         self._getSceneRenderer(scene).update(depsgraph)
+        self._updateBackgroundColor(depsgraph)
         scale = render.resolution_percentage / 100
         dims = (int(render.resolution_x * scale), int(render.resolution_y * scale))
         self._updateDims(dims)
@@ -1601,7 +1634,7 @@ class BerryBushRenderEngine(bpy.types.RenderEngine):
         dims = (context.region.width, context.region.height)
         if dims != self.dims:
             self._updateDims(dims)
-        self._backgroundColor = np.array(context.scene.world.color[:3]) ** .4545
+        self._updateBackgroundColor(depsgraph)
         # this makes response immediate for some updates that otherwise result in a delayed draw
         # (for instance, using the proputils collection move operators)
         self.tag_redraw()
