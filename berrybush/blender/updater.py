@@ -13,9 +13,9 @@ def update(_):
 @bpy.app.handlers.persistent
 def saveVer(_):
     """Before saving, update the BerryBush version for every scene in the Blend file."""
-    latestVer = addonVer()
+    currentVer = addonVer()
     for scene in bpy.data.scenes:
-        scene.brres.version = latestVer
+        scene.brres.version = currentVer
 
 
 def addonVer() -> tuple[int, int, int]:
@@ -49,24 +49,24 @@ class UpdateBRRES(bpy.types.Operator):
     def execute(self, context: bpy.types.Context):
         # get latest version & blendfile version from scene settings
         sceneSettings = bpy.data.scenes[0].brres
-        currentVer = tuple(sceneSettings.version)
-        latestVer = addonVer()
+        sceneVer = tuple(sceneSettings.version)
+        currentVer = addonVer()
         # special 1.0.0 detection (it used a different version system)
         if "version_" in sceneSettings:
-            currentVer = (1, 0, 0)
+            sceneVer = (1, 0, 0)
             for scene in bpy.data.scenes:
                 del scene.brres["version_"]
         # perform updates
-        if currentVer != latestVer and currentVer != (0, 0, 0):
-            curVerStr = verStr(currentVer)
-            self.report({'INFO'}, f"Loading file saved using BerryBush version {curVerStr}")
+        if sceneVer != currentVer and sceneVer != (0, 0, 0):
+            self.report({'INFO'}, f"Loading file saved using BerryBush version {verStr(sceneVer)}"
+                                  f" (current version: {verStr(currentVer)})")
             # 1.1.0
-            if compareVers(currentVer, (1, 1, 0)) < 0:
+            if compareVers(sceneVer, (1, 1, 0)) < 0:
                 # open vertex color gamma updater
                 bpy.ops.brres.update_vert_colors_1_1_0('INVOKE_DEFAULT')
-                currentVer = (1, 1, 0)
+                sceneVer = (1, 1, 0)
             # 1.2.0
-            if compareVers(currentVer, (1, 2, 0)) < 0:
+            if compareVers(sceneVer, (1, 2, 0)) < 0:
                 # update texture transform names for fcurves
                 for mat in bpy.data.materials:
                     for tex in mat.brres.textures:
@@ -74,7 +74,7 @@ class UpdateBRRES(bpy.types.Operator):
                     for indTf in mat.brres.indSettings.transforms:
                         indTf.transform.name = indTf.name
             for scene in bpy.data.scenes:
-                scene.brres.version = latestVer
+                scene.brres.version = currentVer
         return {'FINISHED'}
 
 
