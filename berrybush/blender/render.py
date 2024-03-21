@@ -992,7 +992,7 @@ class StandardObjectManager(ObjectManager[MaterialManagerT]):
             renderObject.updateMatrix(obj)
         # set draw priority
         brres = obj.original.data.brres if obj.original.type == 'MESH' else None
-        renderObject.drawPriority = brres.drawPriority if brres and brres.enableDrawPrio else 0
+        renderObject.drawPriority = brres.drawPrio if brres and brres.enableDrawPrio else 0
         # prepare mesh
         mesh.calc_loop_triangles()
         mesh.calc_normals_split()
