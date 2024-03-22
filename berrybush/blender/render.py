@@ -975,6 +975,11 @@ class StandardObjectManager(ObjectManager[MaterialManagerT]):
             if update.is_updated_geometry:
                 self._updateObject(obj)
 
+    def _getMaterials(self, obj: bpy.types.Object,
+                      mesh: bpy.types.Mesh) -> list[bpy.types.Material]:
+        """Get the Blender materials for an object's mesh."""
+        return mesh.materials
+
     def _getBrresLayerNames(self, mesh: bpy.types.Mesh) -> tuple[list[str], list[str]]:
         """Get the BRRES color & UV attribute names for a mesh."""
         return (mesh.brres.meshAttrs.clrs, mesh.brres.meshAttrs.uvs)
@@ -1013,7 +1018,7 @@ class StandardObjectManager(ObjectManager[MaterialManagerT]):
         renderObject.batches.clear()
         noMat = np.full(loopIdcs.shape, len(mesh.materials) == 0) # all loops w/ no material
         matSlotIdcs: dict[bpy.types.Material, list[int]] = {}
-        for i, mat in enumerate(mesh.materials):
+        for i, mat in enumerate(self._getMaterials(obj, mesh)):
             # get matSlotIdcs to contain the indices used for each material
             # (may be multiple if the same material shows up in multiple slots)
             if mat in matSlotIdcs:
@@ -1044,9 +1049,15 @@ class StandardObjectManager(ObjectManager[MaterialManagerT]):
 class PreviewObjectManager(StandardObjectManager[MaterialManagerT]):
 
     def _updateObject(self, obj: bpy.types.Object):
-        # only include objects whose names start with "preview" (disregard floor, etc)
-        if obj.name.startswith("preview"):
+        # floor objects are simply ignored
+        if obj.name != "Floor":
             super()._updateObject(obj)
+
+    def _getMaterials(self, obj: bpy.types.Object, mesh: bpy.types.Mesh):
+        return mesh.materials if obj.name.startswith("preview") else [None] * len(mesh.materials)
+
+    def _getBrresLayerNames(self, mesh: bpy.types.Mesh):
+        return (["Col"] * gx.MAX_CLR_ATTRS, ["UVMap"] * gx.MAX_UV_ATTRS)
 
 
 class BatchInfo:
@@ -1158,10 +1169,6 @@ class BrresRenderer(ABC, Generic[TextureManagerT, MaterialManagerT, ObjectManage
         with open(shaderPath / "fragment.glsl", "r", encoding="utf-8") as f:
             shaderInfo.fragment_source(f.read())
         return gpu.shader.create_from_info(shaderInfo)
-
-    def _getBrresLayerNames(self, mesh: bpy.types.Mesh) -> tuple[list[str], list[str]]:
-        """Get the BRRES color & UV attribute names for a mesh."""
-        return (mesh.brres.meshAttrs.clrs, mesh.brres.meshAttrs.uvs)
 
     def delete(self):
         """Clean up resources managed by this renderer."""
@@ -1380,9 +1387,6 @@ class BrresPreviewRenderer(BrresRenderer[PreviewTextureManager, PreviewMaterialM
         self._materialManager = PreviewMaterialManager(self._textureManager)
         self._objectManager = PreviewObjectManager(self._materialManager)
 
-    def _getBrresLayerNames(self, mesh: bpy.types.Mesh):
-        return (["Col"] * gx.MAX_CLR_ATTRS, ["UVMap"] * gx.MAX_UV_ATTRS)
-
     def preDraw(self):
         self.shader.bind()
         # since bgl isn't allowed, keep things simple w/ a forced depth test
@@ -1574,7 +1578,7 @@ class BerryBushRenderEngine(bpy.types.RenderEngine):
             try:
                 # this check is done this way because for material previews w/o floors,
                 # there's actually still a Floor object - its material is just called FloorHidden
-                return "Floor" not in objects["Floor"].data.materials
+                return "Floor" not in objects["Floor"].material_slots
             except KeyError:
                 return True
         return False
