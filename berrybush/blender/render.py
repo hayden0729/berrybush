@@ -529,8 +529,6 @@ class BglTextureManager(TextureManager):
         pxBuffers = [mainPxBuffer]
         self._images[img.name] = pxBuffers
         dims = np.array(px.shape[:2][::-1], dtype=np.integer)
-        if not np.all(dims == BlendImageExtractor.getDims(img, setLargeToBlack=True)):
-            print(img.name, dims, BlendImageExtractor.getDims(img, setLargeToBlack=True))
         # load mipmaps if provided
         for mm in img.brres.mipmaps:
             dims //= 2
@@ -873,6 +871,15 @@ class StandardMaterialManager(MaterialManager[TextureManagerT]):
             pass
 
 
+class PreviewMaterialManager(StandardMaterialManager[TextureManagerT]):
+
+    def processDepsgraphUpdate(self, update: bpy.types.DepsgraphUpdate):
+        # do nothing, as previews don't need updates
+        # and updates create issues when you have multiple materials with the same name,
+        # which is only possible in previews (e.g., if material being previewed is called "Floor")
+        pass
+
+
 class RenderObject:
 
     _EMPTY_UBO_BYTES = b"\x00" * ShaderMesh.getSize()
@@ -1035,15 +1042,11 @@ class StandardObjectManager(ObjectManager[MaterialManagerT]):
 
 
 class PreviewObjectManager(StandardObjectManager[MaterialManagerT]):
-    """Object manager for material previews (the "Floor" object is never drawn)"""
 
-    def getDrawCalls(self):
-        drawCalls = super().getDrawCalls()
-        try:
-            floor = self._objects["Floor"]
-            return [(o, m ,b) for (o, m, b) in drawCalls if o is not floor]
-        except KeyError:
-            return drawCalls
+    def _updateObject(self, obj: bpy.types.Object):
+        # only include objects whose names start with "preview" (disregard floor, etc)
+        if obj.name.startswith("preview"):
+            super()._updateObject(obj)
 
 
 class BatchInfo:
@@ -1361,7 +1364,7 @@ class BrresBglRenderer(BrresRenderer[BglTextureManager, StandardMaterialManager,
         bgl.glDisable(bgl.GL_DEPTH_TEST)
 
 
-class BrresPreviewRenderer(BrresRenderer[PreviewTextureManager, StandardMaterialManager,
+class BrresPreviewRenderer(BrresRenderer[PreviewTextureManager, PreviewMaterialManager,
                                          PreviewObjectManager]):
     """Renders a Blender BRRES scene in "preview mode".
     
@@ -1374,7 +1377,7 @@ class BrresPreviewRenderer(BrresRenderer[PreviewTextureManager, StandardMaterial
     def __init__(self):
         super().__init__()
         self._textureManager = PreviewTextureManager()
-        self._materialManager = StandardMaterialManager(self._textureManager)
+        self._materialManager = PreviewMaterialManager(self._textureManager)
         self._objectManager = PreviewObjectManager(self._materialManager)
 
     def _getBrresLayerNames(self, mesh: bpy.types.Mesh):
