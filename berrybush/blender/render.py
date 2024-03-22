@@ -1361,7 +1361,7 @@ class BrresBglRenderer(BrresRenderer[BglTextureManager, StandardMaterialManager,
         bgl.glDisable(bgl.GL_DEPTH_TEST)
 
 
-class BrresPreviewRenderer(BrresRenderer[BglTextureManager, StandardMaterialManager,
+class BrresPreviewRenderer(BrresRenderer[PreviewTextureManager, StandardMaterialManager,
                                          PreviewObjectManager]):
     """Renders a Blender BRRES scene in "preview mode".
     
