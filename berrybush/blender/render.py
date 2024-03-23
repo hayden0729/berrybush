@@ -880,6 +880,10 @@ class BrresRenderer(ABC, Generic[TextureManagerT, MaterialManagerT, ObjectManage
         If no context is provided, then the settings will be updated for new & deleted Blender
         objects, but changes to existing ones will be ignored.
         """
+        import cProfile, pstats
+        from pstats import SortKey
+        pr = cProfile.Profile()
+        pr.enable()
         # remove deleted stuff & add new stuff
         self._objectManager.addNewAndRemoveUnusedObjects(depsgraph, context)
         isMatUpdate = depsgraph.id_type_updated('MATERIAL')
@@ -918,6 +922,10 @@ class BrresRenderer(ABC, Generic[TextureManagerT, MaterialManagerT, ObjectManage
                         # (or no context provided, which means this is a final render, and in that
                         # case tev deletion makes no sense as that's not animatable)
                         pass
+        pr.disable()
+        with open(LOG_PATH, "w", encoding="utf-8") as logFile:
+            ps = pstats.Stats(pr, stream=logFile).sort_stats(SortKey.CUMULATIVE)
+            ps.print_stats()
 
     def draw(self, projectionMtx: Matrix, viewMtx: Matrix):
         """Draw the current BRRES scene to the active framebuffer."""

@@ -1330,7 +1330,7 @@ class BRRESExporter():
         self.images[bImg] = img
         self.res.folder(tex0.TEX0).append(img)
         img.fmt = BlendImageExtractor.getFormat(bImg)
-        px = BlendImageExtractor.getRgba(img)
+        px = BlendImageExtractor.getRgba(bImg)
         img.images.append(px[::-1])
         dims = np.array(px.shape[:2], dtype=np.integer)
         for mm in bImg.brres.mipmaps:
