@@ -232,6 +232,8 @@ class BglTextureManager(TextureManager):
         super().__init__()
         self._textures: dict[ShaderTexture, tuple[int, int]] = {}
         """OpenGL bindcode & mipmap count for each texture."""
+        self._textureBufferCache: dict[ShaderTexture, dict[int, bgl.Buffer]] = {}
+        """Image buffer for each texture."""
         self._images: dict[str, list[bgl.Buffer]] = {}
         """Data buffer for each mipmap of each image (original included)."""
         self._usedTextures: set[ShaderTexture] = set()
@@ -275,16 +277,33 @@ class BglTextureManager(TextureManager):
         if not tex.hasImg:
             return
         img = bpy.data.images[tex.imgName]
-        bindcodeBuf = bgl.Buffer(bgl.GL_INT, 1)
-        bgl.glGenTextures(1, bindcodeBuf)
-        bindcode = bindcodeBuf[0] # pylint: disable=unsubscriptable-object
+        bindcode: int
+        # use existing bindcode if it exists; otherwise, generate a new one
+        try:
+            bindcode = self._textures[tex][0]
+        except KeyError:
+            bindcodeBuf = bgl.Buffer(bgl.GL_INT, 1)
+            bgl.glGenTextures(1, bindcodeBuf)
+            bindcode = bindcodeBuf[0] # pylint: disable=unsubscriptable-object
         self._textures[tex] = (bindcode, len(img.brres.mipmaps))
         bgl.glBindTexture(bgl.GL_TEXTURE_2D, bindcode)
         imgBuffers = self._getImage(img)
         fmt = bgl.GL_RGBA
         dims = BlendImageExtractor.getDims(img, setLargeToBlack=True)
+        # associate mipmaps with their buffers for gl texture
+        # textureBufferCache is used to bypass glTexImage2D (relatively expensive) when possible
+        try:
+            mipmapBuffers = self._textureBufferCache[tex]
+        except KeyError:
+            mipmapBuffers = self._textureBufferCache[tex] = {}
         for i, b in enumerate(imgBuffers):
-            bgl.glTexImage2D(bgl.GL_TEXTURE_2D, i, fmt, *dims, 0, fmt, bgl.GL_FLOAT, b)
+            try:
+                texImageCallNeeded = mipmapBuffers[i] is not b
+            except KeyError:
+                mipmapBuffers[i] = b
+                texImageCallNeeded = True
+            if texImageCallNeeded:
+                bgl.glTexImage2D(bgl.GL_TEXTURE_2D, i, fmt, *dims, 0, fmt, bgl.GL_FLOAT, b)
             dims //= 2
 
     def updateTexturesUsingImage(self, img: Image):
