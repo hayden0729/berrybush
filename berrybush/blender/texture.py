@@ -317,8 +317,6 @@ class ImgSettings(bpy.types.PropertyGroup):
 
     mipmaps: MipmapSlot.CustomIDCollectionProperty()
 
-    warnSupPow2: WarningSuppressionProperty()
-
     warnSupSize: WarningSuppressionProperty()
 
 
@@ -405,7 +403,7 @@ class ImgPanel(TexSubPanel):
     def draw(self, context):
         layout = self.layout
         matSettings = context.material.brres
-        texSettings = matSettings.textures.activeItem()
+        texSettings: TexSettings = matSettings.textures.activeItem()
         layout.row().prop(texSettings, "uiImgTab", expand=True)
         activeImg: bpy.types.Image = None
         if texSettings.uiImgTab == 'IMG':
@@ -414,12 +412,20 @@ class ImgPanel(TexSubPanel):
                 texImg = texSettings.imgs[texSettings.activeImgSlot - 1]
                 activeImg = texImg.img
                 if activeImg:
-                    dims = np.array(activeImg.size, dtype=int)
-                    if any(bin(dim).count("1") > 1 for dim in dims):
-                        drawWarningUI(layout, "Dimensions aren't both powers of 2",
-                                      activeImg.brres, "warnSupPow2")
-                    if np.any(dims > gx.MAX_TEXTURE_SIZE):
-                        drawWarningUI(layout, f"Dimensions aren't both <= {gx.MAX_TEXTURE_SIZE}",
+                    # warn about improper dimensions
+                    wrapModes = (texSettings.wrapModeU, texSettings.wrapModeV)
+                    pow2Warning = sizeWarning = False
+                    for size, wrapMode in zip(activeImg.size, wrapModes):
+                        if wrapMode != 'CLAMP' and bin(size).count("1") > 1:
+                            pow2Warning = True
+                        if size > gx.MAX_TEXTURE_SIZE:
+                            sizeWarning = True
+                    if pow2Warning:
+                        drawWarningUI(layout,
+                                      "Size on non-clamped axis is not a power of 2")
+                    if sizeWarning:
+                        drawWarningUI(layout,
+                                      f"Image dimensions are not both <= {gx.MAX_TEXTURE_SIZE}",
                                       activeImg.brres, "warnSupSize")
                 layout.template_ID_preview(texImg, "img", new="image.new", open="image.open")
                 if activeImg:

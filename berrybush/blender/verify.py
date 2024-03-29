@@ -43,17 +43,29 @@ def verifyBRRES(op: "VerifyBRRES", context: bpy.types.Context, limiter: ObjectLi
     usedTevs = set()
     usedMats.discard(None)
     for mat in usedMats:
-        # textures w/o images & images w/ dimensions that aren't powers of 2
+        # texture problems
         for tex in mat.brres.textures:
             for slot, texImg in enumerate(tex.imgs, 1):
                 img = texImg.img
+                images.add(img)
+                # no image
                 if img is None:
                     numProblems += 1
-                    e = (f"Animation slot {slot} for texture '{tex.name}' of material '{mat.name}' "
+                    e = (f"Animation Slot {slot} of texture '{tex.name}' of material '{mat.name}' "
                          f"is empty")
                     op.report({'INFO'}, e)
                     continue
-                images.add(img)
+                # non-power of 2 dims
+                wrapModes = (tex.wrapModeU, tex.wrapModeV)
+                for size, wrapMode in zip(img.size, wrapModes):
+                    if wrapMode != 'CLAMP' and bin(size).count("1") > 1:
+                        numProblems += 1
+                        e = (f"The image '{img.name}' used in Animation Slot {slot} of texture "
+                             f"'{tex.name}' of material '{mat.name}' has a non-power of 2 size on "
+                             f"an axis with non-clamp wrapping "
+                             f"(dimensions: {tuple(img.size)})")
+                        op.report({'INFO'}, e)
+                        break
         # materials w/o tev configs
         try:
             tev = context.scene.brres.tevConfigs[mat.brres.tevID]
@@ -135,24 +147,16 @@ def verifyBRRES(op: "VerifyBRRES", context: bpy.types.Context, limiter: ObjectLi
                          f"initial state is undefined)")
                     op.report({'INFO'}, e)
     # image problems
-    imgMax = gx.MAX_TEXTURE_SIZE
     for img in images:
-        # non-power of 2 dims
-        dims = np.array(img.size, dtype=int)
-        if any(bin(dim).count("1") > 1 for dim in dims):
-            if not op.includeSuppressed and img.brres.warnSupPow2:
-                numSuppressed += 1
-            else:
-                numProblems += 1
-                e = f"Image '{img.name}' has dimensions that aren't both powers of 2: {tuple(dims)}"
-                op.report({'INFO'}, e)
         # excessive size
-        if np.any(dims > imgMax):
+        dims = np.array(img.size, dtype=int)
+        if np.any(dims > gx.MAX_TEXTURE_SIZE):
             if not op.includeSuppressed and img.brres.warnSupSize:
                 numSuppressed += 1
             else:
                 numProblems += 1
-                e = f"Image '{img.name}' has dimensions that aren't both <= {imgMax}: {tuple(dims)}"
+                e = (f"Image '{img.name}' has dimensions that aren't"
+                     f"both <= {gx.MAX_TEXTURE_SIZE}: {tuple(dims)}")
                 op.report({'INFO'}, e)
         # improper mipmap dims
         for mm in img.brres.mipmaps:
@@ -218,19 +222,19 @@ class VerifyBRRES(bpy.types.Operator):
     )
 
     def execute(self, context: bpy.types.Context):
-        self.report({'INFO'}, "Searching for BRRES warnings...")
+        self.report({'INFO'}, "Searching for BRRES warnings to report...")
         limiter = ObjectLimiterFactory.create(context, self.limitTo)
         warns, suppressed = verifyBRRES(self, context, limiter)
         if warns:
             plural = "s" if warns > 1 else ""
             sup = f", plus {suppressed} suppressed" if suppressed else ""
-            e = f"{warns} BRRES warning{plural} detected{sup}. Check the Info Log for details"
+            e = f"{warns} BRRES warning{plural} reported{sup}. Check the Info Log for details"
             self.report({'WARNING'}, e)
         elif suppressed:
             plural = "s" if suppressed > 1 else ""
-            self.report({'INFO'}, f"{suppressed} BRRES warning{plural} detected & suppressed")
+            self.report({'INFO'}, f"{suppressed} BRRES warning{plural} reported & suppressed")
         else:
-            self.report({'INFO'}, "No BRRES warnings detected")
+            self.report({'INFO'}, "No BRRES warnings reported")
         return {'FINISHED'}
 
     def invoke(self, context: bpy.types.Context, event: bpy.types.Event):
