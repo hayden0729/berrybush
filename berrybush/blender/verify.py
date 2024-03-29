@@ -10,7 +10,7 @@ from ..wii import gx
 def verifyBRRES(op: "VerifyBRRES", context: bpy.types.Context, limiter: ObjectLimiter):
     """Verify the scene's BRRES settings, reporting warnings.
 
-    The number of warnings reported and number of warnings suppressed are returned.."""
+    The number of warnings reported and number of warnings suppressed are returned."""
     numProblems = 0
     numSuppressed = 0
     usedMats = set()
