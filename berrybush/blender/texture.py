@@ -416,15 +416,11 @@ class ImgPanel(TexSubPanel):
                 if activeImg:
                     dims = np.array(activeImg.size, dtype=int)
                     if any(bin(dim).count("1") > 1 for dim in dims):
-                        drawWarningUI(
-                            layout, activeImg.brres, "warnSupPow2",
-                            "Dimensions aren't both powers of 2"
-                        )
+                        drawWarningUI(layout, "Dimensions aren't both powers of 2",
+                                      activeImg.brres, "warnSupPow2")
                     if np.any(dims > gx.MAX_TEXTURE_SIZE):
-                        drawWarningUI(
-                            layout, activeImg.brres, "warnSupSize",
-                            f"Dimensions aren't both <= {gx.MAX_TEXTURE_SIZE}"
-                        )
+                        drawWarningUI(layout, f"Dimensions aren't both <= {gx.MAX_TEXTURE_SIZE}",
+                                      activeImg.brres, "warnSupSize")
                 layout.template_ID_preview(texImg, "img", new="image.new", open="image.open")
                 if activeImg:
                     imgCol = layout.column()

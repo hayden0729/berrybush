@@ -178,18 +178,20 @@ def WarningSuppressionProperty():
     )
 
 
-def drawWarningUI(layout: bpy.types.UILayout, data, propName: str, text: str):
-    """Draw the UI for a BRRES warning suppression property."""
-    supEnabled = getattr(data, propName)
-    supIcon = 'HIDE_ON' if supEnabled else 'HIDE_OFF'
+def drawWarningUI(layout: bpy.types.UILayout, text: str,
+                  suppressionData = None, suppressionProp = ""):
+    """Draw a BRRES verifier warning, optionally with a suppression button."""
     warnRow = layout.row()
     warnRow.alignment = 'CENTER'
     labelRow = warnRow.row()
     labelRow.alignment = 'CENTER'
-    labelRow.enabled = not supEnabled
     labelRow.label(text="", icon='ERROR')
     labelRow.label(text=text)
-    warnRow.prop(data, propName, text="", icon=supIcon, emboss=False)
+    if suppressionData:
+        suppressionEnabled = getattr(suppressionData, suppressionProp)
+        labelRow.enabled = not suppressionEnabled
+        supIcon = 'HIDE_ON' if suppressionEnabled else 'HIDE_OFF'
+        warnRow.prop(suppressionData, suppressionProp, text="", icon=supIcon, emboss=False)
 
 
 class VerifyBRRES(bpy.types.Operator):
