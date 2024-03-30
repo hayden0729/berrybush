@@ -361,9 +361,17 @@ class BRRESMdlExporter():
         if not settings.useCurrentPose:
             arm.pose_position = 'REST' # temporarily put rig in rest position (pose restored at end)
             parentResExporter.depsgraph.update()
-        self._hasExtraRoot = settings.forceRootBones and len(arm.bones) > 0
+        # hasExtraRoot is usually false here (extra root hasn't been created),
+        # but if the option is disabled and the armature alreaday has a root, new root creation is
+        # bypassed by setting it to true
+        self._hasExtraRoot = not settings.createNewRoot and len(arm.bones) > 0
         self.joints: dict[str, mdl0.Joint] = {}
         self._exportJoints(armObj)
+        if settings.createNewRoot:
+            # except for this call, extra root is only called when needed, meaning it might get
+            # "optimized out" of the final model - if the option is enabled, just do this to make
+            # sure it'll always exist for the sake of consistency
+            self._extraRoot()
         # generate meshes & everything they use
         self._mats: dict[str, mdl0.Material] = {}
         self.tevConfigs: dict[str, mdl0.TEVConfig] = {}
@@ -763,7 +771,7 @@ class BRRESMdlExporter():
         """Extra root joint to be used in case of multiple roots or objects without bone parenting.
 
         This creates one joint the first time it's called, and returns that same joint for
-        subsequent calls. If "force root bones" is enabled and this model's corresponding armature
+        subsequent calls. If "Create New Roots" is disabled and this model's corresponding armature
         has at least one bone, this simply returns the root joint (doesn't create a new one)."""
         if self._hasExtraRoot:
             return self.model.rootJoint
@@ -1514,10 +1522,10 @@ class ExportBRRES(bpy.types.Operator, ExportHelper):
         default=True
     )
 
-    forceRootBones: bpy.props.BoolProperty(
-        name="Force Root Bones",
-        description="Use current armature roots for unparented assets rather than creating new ones", # pylint: disable=line-too-long
-        default=False
+    createNewRoot: bpy.props.BoolProperty(
+        name="Create New Roots",
+        description="Create a new root bone for each BRRES MDL named after its corresponding armature (assets parented directly to armatures will use these bones - otherwise, they'll use existing roots)", # pylint: disable=line-too-long
+        default=True
     )
 
     removeUnusedBones: bpy.props.BoolProperty(
@@ -1720,7 +1728,7 @@ class ArmGeoPanel(ExportPanel):
         layout.enabled = settings.doArmGeo
         layout.prop(settings, "applyModifiers")
         layout.prop(settings, "useCurrentPose")
-        layout.prop(settings, "forceRootBones")
+        layout.prop(settings, "createNewRoot")
         layout.prop(settings, "removeUnusedBones")
         drawCheckedProp(layout, settings, "doQuantize", settings, "quantizeSteps")
         layout.prop(settings, "primaryBoneAxis", expand=True)
