@@ -1499,7 +1499,7 @@ class ExportBRRES(bpy.types.Operator, ExportHelper):
     useCurrentPose: bpy.props.BoolProperty(
         name="Use Current Pose",
         description="Apply current armature pose as rest pose",
-        default=False
+        default=True
     )
 
     forceRootBones: bpy.props.BoolProperty(
