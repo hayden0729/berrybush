@@ -1135,16 +1135,28 @@ class BRRESSrtExporter(BRRESAnimExporter[srt0.SRT0]):
             # parse data path to get texture index & specific property
             # if path is invalid for srt0, skip this fcurve
             try:
-                texAnimColl, texIdx, texProp = pathInfo[fcurve.data_path]
+                texAnimCollName, texIdx, texProp = pathInfo[fcurve.data_path]
             except KeyError:
                 continue
             # grab existing texture animation or create new one if this is the first fcurve read
             # that uses this texture
-            texAnimColl: dict[int, srt0.TexAnim] = getattr(matAnim, texAnimColl)
+            texAnimColl: dict[int, srt0.TexAnim] = getattr(matAnim, texAnimCollName)
             try:
                 texAnim = texAnimColl[texIdx]
             except KeyError:
                 texAnim = srt0.TexAnim()
+                try:
+                    # try to set default transform values to those actually used in the model
+                    # (by default, they're just identity, which may not be desired)
+                    texTransform = strip.id_data.brres.textures[texIdx].transform
+                    texAnim.scale[0].keyframes[0, 1] = texTransform.scale[0]
+                    texAnim.scale[1].keyframes[0, 1] = texTransform.scale[1]
+                    texAnim.rot[0].keyframes[0, 1] = texTransform.rotation
+                    texAnim.trans[0].keyframes[0, 1] = texTransform.translation[0]
+                    texAnim.trans[1].keyframes[0, 1] = texTransform.translation[1]
+                except IndexError:
+                    # texture doesn't actually exist - whatever, just use default values (identity)
+                    pass
                 texAnimColl[texIdx] = texAnim
             compAnim: animation.Animation = getattr(texAnim, texProp)[fcurve.array_index]
             # fill out animation data by evaluating curve
