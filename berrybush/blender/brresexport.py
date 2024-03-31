@@ -1439,18 +1439,13 @@ def drawOp(self, context: bpy.types.Context):
     self.layout.operator(ExportBRRES.bl_idname, text="Binary Revolution Resource (.brres)")
 
 
-class ExportBRRES(bpy.types.Operator, ExportHelper):
-    """Write a BRRES file"""
-
-    bl_idname = "export_scene.brres"
-    bl_label = "Export BRRES"
-    bl_options = {'UNDO', 'PRESET'}
-
-    filename_ext = ".brres"
-    filter_glob: bpy.props.StringProperty(
-        default="*.brres",
-        options={'HIDDEN'},
-    )
+class ExportSettingsMixin():
+    """Contains bpy property definitions for the BRRES export settings.
+    
+    This class is designed as a mixin rather than a direct child of `bpy.types.PropertyGroup` so
+    that these settings can be included in the export operator directly, enabling easy customization
+    of export hotkeys within Blender's UI.
+    """
 
     includeSuppressed: bpy.props.BoolProperty(
         name="Bypass Warning Suppression",
@@ -1629,6 +1624,24 @@ class ExportBRRES(bpy.types.Operator, ExportHelper):
         default=1
     )
 
+
+class ExportSettings(ExportSettingsMixin, bpy.types.PropertyGroup):
+    pass
+
+
+class ExportBRRES(bpy.types.Operator, ExportHelper, ExportSettingsMixin):
+    """Write a BRRES file"""
+
+    bl_idname = "export_scene.brres"
+    bl_label = "Export BRRES"
+    bl_options = {'UNDO', 'PRESET'}
+
+    filename_ext = ".brres"
+    filter_glob: bpy.props.StringProperty(
+        default="*.brres",
+        options={'HIDDEN'},
+    )
+
     def verify(self, context: bpy.types.Context, limiter: ObjectLimiter):
         """Run the BRRES verifier based on the data exported by this exporter."""
         name = f"\"{os.path.basename(self.filepath)}\""
@@ -1643,6 +1656,30 @@ class ExportBRRES(bpy.types.Operator, ExportHelper):
             self.report({'INFO'}, f"Exported {name} with {suppressed} suppressed warning{plural}")
         else:
             self.report({'INFO'}, f"Exported {name} without any warnings")
+
+    def loadSettings(self, scene: bpy.types.Scene):
+        """Load the saved export settings from a scene."""
+        settings: ExportSettings = scene.brres.exportSettings
+        for key, value in settings.items():
+            try:
+                # only load settings that haven't already been set by a hotkey
+                if key not in self.properties: # pylint: disable=unsupported-membership-test
+                    setattr(self, key, value)
+            except (AttributeError, TypeError):
+                pass
+
+    def saveSettings(self, scene: bpy.types.Scene):
+        """Save the current export settings to a scene."""
+        settings: ExportSettings = scene.brres.exportSettings
+        for key in self.properties.keys():
+            try:
+                settings[key] = getattr(self, key)
+            except (AttributeError, TypeError):
+                pass
+
+    def invoke(self, context, event):
+        self.loadSettings(context.scene)
+        return ExportHelper.invoke(self, context, event)
 
     def execute(self, context):
         profiler = Profile()
@@ -1662,6 +1699,7 @@ class ExportBRRES(bpy.types.Operator, ExportHelper):
         with open(self.filepath, "wb") as f: # export main file
             f.write(BRRESExporter.export(context, self, limiter, baseData))
         self.verify(context, limiter)
+        self.saveSettings(context.scene)
         context.window.cursor_set('DEFAULT')
         restoreView(restoreShading)
         profiler.disable()

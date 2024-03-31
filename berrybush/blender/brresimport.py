@@ -1407,18 +1407,13 @@ def drawOp(self, context: bpy.types.Context):
     self.layout.operator(ImportBRRES.bl_idname, text="Binary Revolution Resource (.brres)")
 
 
-class ImportBRRES(bpy.types.Operator, ImportHelper):
-    """Read a BRRES file"""
-
-    bl_idname = "import_scene.brres"
-    bl_label = "Import BRRES"
-    bl_options = {'UNDO', 'PRESET'}
-
-    filename_ext = ".brres"
-    filter_glob: bpy.props.StringProperty(
-        default="*.brres",
-        options={'HIDDEN'},
-    )
+class ImportSettingsMixin():
+    """Contains bpy property definitions for the BRRES import settings.
+    
+    This class is designed as a mixin rather than a direct child of `bpy.types.PropertyGroup` so
+    that these settings can be included in the import operator directly, enabling easy customization
+    of import hotkeys within Blender's UI.
+    """
 
     mergeMats: bpy.props.BoolProperty(
         name="Merge Duplicate Materials",
@@ -1521,6 +1516,48 @@ class ImportBRRES(bpy.types.Operator, ImportHelper):
         default=1
     )
 
+
+class ImportSettings(ImportSettingsMixin, bpy.types.PropertyGroup):
+    pass
+
+
+class ImportBRRES(bpy.types.Operator, ImportHelper, ImportSettingsMixin):
+    """Read a BRRES file"""
+
+    bl_idname = "import_scene.brres"
+    bl_label = "Import BRRES"
+    bl_options = {'UNDO', 'PRESET'}
+
+    filename_ext = ".brres"
+    filter_glob: bpy.props.StringProperty(
+        default="*.brres",
+        options={'HIDDEN'},
+    )
+
+    def loadSettings(self, scene: bpy.types.Scene):
+        """Load the saved import settings from a scene."""
+        settings: ImportSettings = scene.brres.importSettings
+        for key, value in settings.items():
+            try:
+                # only load settings that haven't already been set by a hotkey
+                if key not in self.properties: # pylint: disable=unsupported-membership-test
+                    setattr(self, key, value)
+            except (AttributeError, TypeError):
+                pass
+
+    def saveSettings(self, scene: bpy.types.Scene):
+        """Save the current import settings to a scene."""
+        settings: ImportSettings = scene.brres.importSettings
+        for key in self.properties.keys():
+            try:
+                settings[key] = getattr(self, key)
+            except (AttributeError, TypeError):
+                pass
+
+    def invoke(self, context, event):
+        self.loadSettings(context.scene)
+        return ImportHelper.invoke(self, context, event)
+
     def execute(self, context):
         profiler = Profile()
         profiler.enable()
@@ -1533,6 +1570,7 @@ class ImportBRRES(bpy.types.Operator, ImportHelper):
                 raise ValueError("File is empty")
             BRRESImporter(context, brres.BRRES.unpack(fileData), self)
         self.report({'INFO'}, f"Imported \"{os.path.basename(self.filepath)}\"")
+        self.saveSettings(context.scene)
         context.window.cursor_set('DEFAULT')
         restoreView(restoreShading)
         profiler.disable()

@@ -82,6 +82,8 @@ classes = (
     mesh.MeshAttrSettings,
     mesh.MeshSettings,
     bone.BoneSettings,
+    brresimport.ImportSettings,
+    brresexport.ExportSettings,
     scene.SceneSettings,
     # ui
     material.MatPanel,

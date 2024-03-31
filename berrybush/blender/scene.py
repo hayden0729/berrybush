@@ -1,12 +1,17 @@
 # 3rd party imports
 import bpy
 # internal imports
+from .brresimport import ImportSettings
+from .brresexport import ExportSettings
 from .tev import TevSettings
 
 
 class SceneSettings(bpy.types.PropertyGroup):
 
     tevConfigs: TevSettings.CustomIDCollectionProperty()
+
+    importSettings: bpy.props.PointerProperty(type=ImportSettings)
+    exportSettings: bpy.props.PointerProperty(type=ExportSettings)
 
     renderAssumeOpaqueMats: bpy.props.BoolProperty(
         name="Assume Opaque Materials",
