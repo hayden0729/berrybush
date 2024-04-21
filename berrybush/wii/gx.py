@@ -1952,7 +1952,13 @@ def expandTristrip(strip: list[int], edgeAdjacentVerts: dict[tuple[int, int], li
             if not offsetAdjacentVerts:
                 del edgeAdjacentVerts[offsetEdge]
         if not adjacentVerts:
-            del edgeAdjacentVerts[latestEdge]
+            try:
+                del edgeAdjacentVerts[latestEdge]
+            except KeyError:
+                # we can only get here if the entry for this edge was deleted in the above loop,
+                # i.e., two of this triangle's edges are the same
+                # (i.e., the triangle is actually just a line)
+                pass
         doReverse = not doReverse
         latestEdge = tuple(strip[-2:][::-1]) if doReverse else tuple(strip[-2:])
 
