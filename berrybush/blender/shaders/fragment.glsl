@@ -1,3 +1,7 @@
+// set a column of a matrix to the provided vector
+// this is equivalent to mtx[idx] = v on most gpus, but using variables as indices directly in certain parts of the code caused issues for one user
+#define SET_COLUMN(mtx, idx, v) switch (idx) { case 0: mtx[0] = v; break; case 1: mtx[1] = v; break; case 2: mtx[2] = v; break; case 3: mtx[3] = v; break; }
+
 vec4 fragColor[2];
 vec2 fragUV[8];
 
@@ -237,14 +241,13 @@ vec4 getTevOutput() {
                 calcOutput = clamp(calcOutput, vec3(0.0), vec3(1.0));
             }
             if (isAlpha) {
-                outputColors[params.outputIdx] = vec4(outputColors[params.outputIdx].rgb, calcOutput[0]);
+                SET_COLUMN(outputColors, params.outputIdx, vec4(outputColors[params.outputIdx].rgb, calcOutput[0]));
             }
             else {
-                outputColors[params.outputIdx] = vec4(calcOutput, outputColors[params.outputIdx].a);
+                SET_COLUMN(outputColors, params.outputIdx, vec4(calcOutput, outputColors[params.outputIdx].a));
             }
         }
     }
-    // return outputColors[0];
     ShaderTevStage lastStage = material.stages[material.numStages - 1];
     return vec4(outputColors[lastStage.colorParams.outputIdx].rgb, outputColors[lastStage.alphaParams.outputIdx].a);
 }
