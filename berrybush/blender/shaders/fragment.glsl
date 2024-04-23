@@ -1,6 +1,8 @@
 // set a column of a matrix to the provided vector
-// this is equivalent to mtx[idx] = v on most gpus, but using variables as indices directly in certain parts of the code caused issues for one user
+// this is equivalent to mtx[idx] = v on most gpus, but using variables as indices directly in certain parts of the code caused issues for one user (king pixel)
 #define SET_COLUMN(mtx, idx, v) switch (idx) { case 0: mtx[0] = v; break; case 1: mtx[1] = v; break; case 2: mtx[2] = v; break; case 3: mtx[3] = v; break; }
+// note: SET_COLUMN() is no longer actually used on matrices - it's exclusively used on arrays of vectors now
+// unknown if this would still cause an issue for king pixel now if it was simply replaced with mtx[idx] = v, but this code works and if it ain't broke...
 
 vec4 fragColor[2];
 vec2 fragUV[8];
@@ -151,14 +153,14 @@ vec4 sampleStageTexture(ShaderTevStage stage) {
 
 vec4 getTevOutput() {
     // calculate the main output of the tev stages
-    mat4 outputColors = material.outputColors;
+    vec4[4] outputColors = material.outputColors;
     for (int stageIdx = 0; stageIdx < material.numStages; stageIdx += 1) {
         ShaderTevStage stage = material.stages[stageIdx];
-        mat4x3 colorArgs;
+        vec3[4] colorArgs;
         for (int calcIdx = 0; calcIdx < 2; calcIdx += 1) { // one calculation for color, one for alpha
             bool isAlpha = (calcIdx == 1);
             ShaderTevStageCalcParams params = (isAlpha) ? stage.alphaParams : stage.colorParams;
-            mat4x3 args;
+            vec3[4] args;
             for (int argIdx = 0; argIdx < 4; argIdx++) {
                 int arg = params.args[argIdx];
                 if (isAlpha) {

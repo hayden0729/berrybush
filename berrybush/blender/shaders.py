@@ -220,8 +220,8 @@ class ShaderMaterial(ShaderStruct):
     textures = ShaderArr(ShaderTexture, gx.MAX_TEXTURES)
     inds = ShaderArr(ShaderIndTex, gx.MAX_INDIRECTS)
     indMtcs = ShaderArr(ShaderMat(ShaderFloat, 2, 3), gx.MAX_INDIRECT_MTCS)
-    constColors = ShaderMat(ShaderFloat, gx.MAX_TEV_CONST_COLORS)
-    outputColors = ShaderMat(ShaderFloat, gx.MAX_TEV_STAND_COLORS + 1)
+    constColors = ShaderArr(ShaderVec(ShaderFloat, 4), gx.MAX_TEV_CONST_COLORS)
+    outputColors = ShaderArr(ShaderVec(ShaderFloat, 4), gx.MAX_TEV_STAND_COLORS + 1)
     lightChans = ShaderArr(ShaderLightChan, gx.MAX_CLR_ATTRS)
     enableBlend = ShaderBool
     alphaTestVals = ShaderVec(ShaderFloat, 2)
