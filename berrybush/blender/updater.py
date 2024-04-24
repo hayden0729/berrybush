@@ -73,6 +73,13 @@ class UpdateBRRES(bpy.types.Operator):
                         tex.transform.name = tex.name
                     for indTf in mat.brres.indSettings.transforms:
                         indTf.transform.name = indTf.name
+            # 1.4.0
+            if compareVers(sceneVer, (1, 4, 0)) < 0:
+                # update texture transform names for fcurves
+                for scene in bpy.data.scenes:
+                    for tevConfig in scene.brres.tevConfigs:
+                        if not tevConfig.users:
+                            tevConfig.fakeUser = True
             for scene in bpy.data.scenes:
                 scene.brres.version = currentVer
         return {'FINISHED'}
