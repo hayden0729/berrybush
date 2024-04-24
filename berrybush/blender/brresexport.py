@@ -1519,7 +1519,7 @@ class ExportSettingsMixin():
 
     createNewRoot: bpy.props.BoolProperty(
         name="Create New Roots",
-        description="Create a new root bone for each BRRES MDL named after its corresponding armature (assets parented directly to armatures will use these bones - otherwise, they'll use existing roots)", # pylint: disable=line-too-long
+        description="Create a new root bone for each BRRES MDL, named after its corresponding armature (assets parented directly to armatures will use these bones - otherwise, they'll use existing roots; note that if multiple roots exist in the latter case, one will be chosen arbitrarily as the exported root, and the others will be exported as its children)", # pylint: disable=line-too-long
         default=True
     )
 
