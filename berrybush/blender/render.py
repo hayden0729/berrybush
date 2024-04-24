@@ -230,10 +230,8 @@ class BglTextureManager(TextureManager):
 
     def __init__(self):
         super().__init__()
-        self._textures: dict[ShaderTexture, tuple[int, int]] = {}
-        """OpenGL bindcode & mipmap count for each texture."""
-        self._textureBufferCache: dict[ShaderTexture, dict[int, bgl.Buffer]] = {}
-        """Image buffer for each texture."""
+        self._textures: dict[ShaderTexture, tuple[int, list[bgl.Buffer]]] = {}
+        """OpenGL bindcode and mipmap image buffers for each texture."""
         self._images: dict[str, list[bgl.Buffer]] = {}
         """Data buffer for each mipmap of each image (original included)."""
         self._usedTextures: set[ShaderTexture] = set()
@@ -266,7 +264,7 @@ class BglTextureManager(TextureManager):
             pxBuffers.append(mmPxBuffer)
 
     def _getTexture(self, tex: ShaderTexture):
-        """Get the bindcode and mipmap count for a texture, updating if nonexistent."""
+        """Get the bindcode and mipmap buffers for a texture, updating if nonexistent."""
         try:
             return self._textures[tex]
         except KeyError:
@@ -278,33 +276,31 @@ class BglTextureManager(TextureManager):
             return
         img = bpy.data.images[tex.imgName]
         bindcode: int
-        # use existing bindcode if it exists; otherwise, generate a new one
+        # use existing bindcode & image buffer cache if they exist; otherwise, generate new stuff
         try:
-            bindcode = self._textures[tex][0]
+            bindcode, mipmapBuffers = self._textures[tex]
         except KeyError:
             bindcodeBuf = bgl.Buffer(bgl.GL_INT, 1)
             bgl.glGenTextures(1, bindcodeBuf)
             bindcode = bindcodeBuf[0] # pylint: disable=unsubscriptable-object
-        self._textures[tex] = (bindcode, len(img.brres.mipmaps))
+            mipmapBuffers = []
+        self._textures[tex] = (bindcode, mipmapBuffers)
         bgl.glBindTexture(bgl.GL_TEXTURE_2D, bindcode)
         imgBuffers = self._getImage(img)
         fmt = bgl.GL_RGBA
         dims = BlendImageExtractor.getDims(img, setLargeToBlack=True)
         # associate mipmaps with their buffers for gl texture
         # textureBufferCache is used to bypass glTexImage2D (relatively expensive) when possible
-        try:
-            mipmapBuffers = self._textureBufferCache[tex]
-        except KeyError:
-            mipmapBuffers = self._textureBufferCache[tex] = {}
         for i, b in enumerate(imgBuffers):
             try:
                 texImageCallNeeded = mipmapBuffers[i] is not b
-            except KeyError:
-                mipmapBuffers[i] = b
+            except IndexError:
+                mipmapBuffers.append(b)
                 texImageCallNeeded = True
             if texImageCallNeeded:
                 bgl.glTexImage2D(bgl.GL_TEXTURE_2D, i, fmt, *dims, 0, fmt, bgl.GL_FLOAT, b)
             dims //= 2
+        del mipmapBuffers[len(imgBuffers):]
 
     def updateTexturesUsingImage(self, img: Image):
         if img.name in self._images:
@@ -318,26 +314,26 @@ class BglTextureManager(TextureManager):
         unusedBindcodes: list[int] = []
         for texture in tuple(self._textures): # tuple() so removal doesn't mess w/ iteration
             if texture not in self._usedTextures:
-                bindcode, numMipmaps = self._textures.pop(texture)
+                bindcode, mipmapBuffers = self._textures.pop(texture)
                 unusedBindcodes.append(bindcode)
         deleteBglTextures(unusedBindcodes)
         self._usedTextures.clear()
 
     def delete(self):
-        bindcodes = [bindcode for (bindcode, numMipmaps) in self._textures.values()]
+        bindcodes = [bindcode for (bindcode, mipmapBuffers) in self._textures.values()]
         deleteBglTextures(bindcodes)
 
     def bindTexture(self, texture: ShaderTexture):
         """Bind a texture in the OpenGL state."""
         self._usedTextures.add(texture)
-        bindcode, mipmapLevels = self._getTexture(texture)
+        bindcode, mipmapBuffers = self._getTexture(texture)
         bgl.glBindTexture(bgl.GL_TEXTURE_2D, bindcode)
         bgl.glTexParameteri(bgl.GL_TEXTURE_2D, bgl.GL_TEXTURE_WRAP_S, texture.wrap[0])
         bgl.glTexParameteri(bgl.GL_TEXTURE_2D, bgl.GL_TEXTURE_WRAP_T, texture.wrap[1])
         bgl.glTexParameteri(bgl.GL_TEXTURE_2D, bgl.GL_TEXTURE_MIN_FILTER, texture.filter[0])
         bgl.glTexParameteri(bgl.GL_TEXTURE_2D, bgl.GL_TEXTURE_MAG_FILTER, texture.filter[1])
         bgl.glTexParameterf(bgl.GL_TEXTURE_2D, bgl.GL_TEXTURE_LOD_BIAS, texture.lodBias)
-        bgl.glTexParameteri(bgl.GL_TEXTURE_2D, bgl.GL_TEXTURE_MAX_LEVEL, mipmapLevels)
+        bgl.glTexParameteri(bgl.GL_TEXTURE_2D, bgl.GL_TEXTURE_MAX_LEVEL, len(mipmapBuffers) - 1)
 
 
 class PreviewTextureManager(TextureManager):
