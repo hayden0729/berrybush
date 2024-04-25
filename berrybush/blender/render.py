@@ -290,7 +290,7 @@ class BglTextureManager(TextureManager):
         fmt = bgl.GL_RGBA
         dims = BlendImageExtractor.getDims(img, setLargeToBlack=True)
         # associate mipmaps with their buffers for gl texture
-        # textureBufferCache is used to bypass glTexImage2D (relatively expensive) when possible
+        # mipmap buffer cache is used to bypass glTexImage2D (relatively expensive) when possible
         for i, b in enumerate(imgBuffers):
             try:
                 texImageCallNeeded = mipmapBuffers[i] is not b
@@ -299,6 +299,7 @@ class BglTextureManager(TextureManager):
                 texImageCallNeeded = True
             if texImageCallNeeded:
                 bgl.glTexImage2D(bgl.GL_TEXTURE_2D, i, fmt, *dims, 0, fmt, bgl.GL_FLOAT, b)
+                mipmapBuffers[i] = b
             dims //= 2
         del mipmapBuffers[len(imgBuffers):]
 
