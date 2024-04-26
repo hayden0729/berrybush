@@ -1,7 +1,84 @@
+# standard imports
+import json
+import urllib
+import urllib.request
 # 3rd party imports
 import bpy
 # internal imports
 from .common import paragraphLabel, getLayerData, setLayerData
+from .preferences import BerryBushPreferences, getPrefs
+
+
+class LatestVersionChecker():
+
+    def __init__(self):
+        self._hasChecked = False
+
+    def _retrieveLatestRelease(self) -> tuple[tuple[int, int, int], str]:
+        """Get the tag & release URL for the latest available version of BerryBush from GitHub."""
+        url = "https://api.github.com/repos/hayden0729/berrybush/releases/latest"
+        with urllib.request.urlopen(url) as response:
+            data = json.load(response)
+            return (tuple(int(v) for v in data["tag_name"].split(".")), data["html_url"])
+
+    def check(self, currentVer: tuple[int, int, int], prefs: BerryBushPreferences):
+        """Display a popup if a newer version of BerryBush than the installed one is available.
+        
+        (If this has already been done, do nothing)
+        """
+        if prefs.doUpdateChecks and not self._hasChecked:
+            self._hasChecked = True
+            try:
+                latestVer, url = self._retrieveLatestRelease()
+            except:
+                print("Failed to retrieve the latest BerryBush version from GitHub")
+                return
+            if not (prefs.skipThisVersion and latestVer == tuple(prefs.latestKnownVersion)):
+                # if the latest version isn't set to be skipped, always reset relevant prefs
+                prefs.latestKnownVersion = latestVer
+                prefs.skipThisVersion = False
+                # finally, do the actual check
+                if compareVers(currentVer, latestVer) < 0:
+                    bpy.ops.brres.show_latest_version('INVOKE_DEFAULT',
+                                                      current=currentVer, latest=latestVer, url=url)
+
+
+LATEST_VERSION_CHECKER = LatestVersionChecker()
+
+
+@bpy.app.handlers.persistent
+def checkLatestVer(_):
+    LATEST_VERSION_CHECKER.check(addonVer(), getPrefs(bpy.context))
+
+
+class ShowLatestVersion(bpy.types.Operator):
+    """Link to the newest version of BerryBush."""
+
+    bl_idname = "brres.show_latest_version"
+    bl_label = "BerryBush Update Available!"
+
+    current: bpy.props.IntVectorProperty(size=3)
+    latest: bpy.props.IntVectorProperty(size=3)
+    url: bpy.props.StringProperty()
+
+    def execute(self, context: bpy.types.Context):
+        bpy.ops.wm.url_open(url=self.url)
+        return {'FINISHED'}
+
+    def invoke(self, context: bpy.types.Context, event: bpy.types.Event):
+        return context.window_manager.invoke_props_dialog(self)
+
+    def draw(self, context: bpy.types.Context):
+        preferences = getPrefs(context)
+        currentStr = verStr(self.current)
+        latestStr = verStr(self.latest)
+        label = f"Click OK to view the latest release ({currentStr} → {latestStr})"
+        self.layout.label(text=label)
+        row = self.layout.row().split(factor=.5)
+        row.prop(preferences, "doUpdateChecks", invert_checkbox=True, text="Disable Update Checks")
+        skipRow = row.row()
+        skipRow.enabled = preferences.doUpdateChecks
+        skipRow.prop(preferences, "skipThisVersion")
 
 
 @bpy.app.handlers.persistent
@@ -19,7 +96,7 @@ def saveVer(_):
 
 
 def addonVer() -> tuple[int, int, int]:
-    """Current version of the BerryBush addon, respresented as a tuple."""
+    """Current installed version of BerryBush, respresented as a tuple."""
     # this is all needed for the version setup descriped in scene.py
     from .. import bl_info # pylint: disable=import-outside-toplevel
     return bl_info["version"]
@@ -43,8 +120,8 @@ def compareVers(verA: tuple[int, int, int], verB: tuple[int, int, int]):
 class UpdateBRRES(bpy.types.Operator):
     """Update the active Blend file if it uses an outdated BerryBush version."""
 
-    bl_idname="brres.update"
-    bl_label="Update BRRES Settings"
+    bl_idname = "brres.update"
+    bl_label = "Update BRRES Settings"
 
     def execute(self, context: bpy.types.Context):
         # get latest version & blendfile version from scene settings

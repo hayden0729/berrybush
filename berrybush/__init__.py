@@ -129,6 +129,7 @@ classes = (
     brresimport.ImportBRRES,
     brresexport.ExportBRRES,
     verify.VerifyBRRES,
+    updater.ShowLatestVersion,
     updater.UpdateBRRES,
     updater.UpdateVertColors1_1_0,
     # preferences
@@ -163,6 +164,7 @@ def register():
     bpy.types.VIEW3D_MT_object.append(verify.drawOp)
     bpy.app.handlers.load_post.append(updater.update)
     bpy.app.handlers.load_post.append(unusedPropertyGroupRemovalHandler)
+    bpy.app.handlers.load_post.append(updater.checkLatestVer)
     bpy.app.handlers.save_pre.append(updater.saveVer)
     render.BerryBushRenderEngine.registerOnPanels()
 

@@ -37,7 +37,19 @@ class BerryBushPreferences(bpy.types.AddonPreferences):
         default=100
     )
 
+    doUpdateChecks: bpy.props.BoolProperty(
+        name="Check For Updates",
+        default=True
+    )
+
+    skipThisVersion: bpy.props.BoolProperty(
+        name="Skip This Version"
+    )
+
+    latestKnownVersion: bpy.props.IntVectorProperty(size=3)
+
     def draw(self, context):
+        # backup stuff
         self.layout.prop(self, "doBackups")
         col = self.layout.column()
         col.enabled = self.doBackups
@@ -45,6 +57,12 @@ class BerryBushPreferences(bpy.types.AddonPreferences):
         drawColumnSeparator(col)
         drawCheckedProp(col, self, "doMaxBackups", self, "maxBackups")
         self.layout.operator("brres.clear_backups")
+        # update stuff
+        row = self.layout.row().split(factor=.5)
+        row.prop(self, "doUpdateChecks")
+        skipRow = row.row()
+        skipRow.enabled = self.doUpdateChecks
+        skipRow.prop(self, "skipThisVersion")
 
 
 def getPrefs(context: bpy.types.Context) -> BerryBushPreferences:
