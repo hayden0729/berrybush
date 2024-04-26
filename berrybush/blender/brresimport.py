@@ -162,8 +162,9 @@ class BRRESMdlImporter():
         configNames: dict[mdl0.TEVConfig, str] = {}
         for mat in model.mats:
             # prioritize shorter names over longer ones
-            if mat.tevConfig not in configNames or len(mat.name) < len(configNames[mat.tevConfig]):
-                configNames[mat.tevConfig] = mat.name
+            config = mat.tevConfig
+            if config and (config not in configNames or len(mat.name) < len(configNames[config])):
+                configNames[config] = mat.name
         sceneConfigs = {c.uuid: c for c in scene.brres.tevConfigs}
         for (brresConfig, name) in configNames.items():
             sceneConfigs[self.getTevConfigUUID(brresConfig)].name = name
