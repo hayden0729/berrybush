@@ -362,15 +362,15 @@ class BRRESMdlExporter():
             arm.pose_position = 'REST' # temporarily put rig in rest position (pose restored at end)
             parentResExporter.depsgraph.update()
         # hasExtraRoot is usually false here (extra root hasn't been created),
-        # but if the option is disabled and the armature alreaday has a root, new root creation is
+        # but if the option is "never" and the armature alreaday has a root, new root creation is
         # bypassed by setting it to true
-        self._hasExtraRoot = not settings.createNewRoot and len(arm.bones) > 0
+        # btw even if create new root is "never", we do still need to make a root if there are
+        # no bones, which is why that check exists
+        self._hasExtraRoot = settings.addNewRoots == 'NEVER' and len(arm.bones) > 0
         self.joints: dict[str, mdl0.Joint] = {}
         self._exportJoints(armObj)
-        if settings.createNewRoot:
-            # except for this call, extra root is only called when needed, meaning it might get
-            # "optimized out" of the final model - if the option is enabled, just do this to make
-            # sure it'll always exist for the sake of consistency
+        if settings.addNewRoots == 'ALWAYS':
+            # this ensures extra root always exists, even if not used
             self._extraRoot()
         # generate meshes & everything they use
         self._mats: dict[str, mdl0.Material] = {}
@@ -770,9 +770,8 @@ class BRRESMdlExporter():
     def _extraRoot(self):
         """Extra root joint to be used in case of multiple roots or objects without bone parenting.
 
-        This creates one joint the first time it's called, and returns that same joint for
-        subsequent calls. If "Create New Roots" is disabled and this model's corresponding armature
-        has at least one bone, this simply returns the root joint (doesn't create a new one)."""
+        (This may be a dynamically created bonus joint, or just the regular root, depending on
+        "Create New Roots")"""
         if self._hasExtraRoot:
             return self.model.rootJoint
         self._hasExtraRoot = True
@@ -1517,10 +1516,15 @@ class ExportSettingsMixin():
         default=True
     )
 
-    createNewRoot: bpy.props.BoolProperty(
-        name="Create New Roots",
-        description="Create a new root bone for each BRRES MDL, named after its corresponding armature (assets parented directly to armatures will use these bones - otherwise, they'll use existing roots; note that if multiple roots exist in the latter case, one will be chosen arbitrarily as the exported root, and the others will be exported as its children)", # pylint: disable=line-too-long
-        default=True
+    addNewRoots: bpy.props.EnumProperty(
+        name="Add New Roots",
+        description="When to add new root bones to BRRES MDLs",
+        items=(
+            ('ALWAYS', "Always", "Always create a new root bone for each armature, named after the armature"), # pylint: disable=line-too-long
+            ('NECESSARY', "When Necessary", "Only create new root bones when needed for handling unparented assets"), # pylint: disable=line-too-long
+            ('NEVER', "Never", "Never create new root bones, and use existing roots as parents for unparented assets if they exist"), # pylint: disable=line-too-long
+        ),
+        default='NECESSARY',
     )
 
     removeUnusedBones: bpy.props.BoolProperty(
@@ -1766,8 +1770,8 @@ class ArmGeoPanel(ExportPanel):
         layout.enabled = settings.doArmGeo
         layout.prop(settings, "applyModifiers")
         layout.prop(settings, "useCurrentPose")
-        layout.prop(settings, "createNewRoot")
         layout.prop(settings, "removeUnusedBones")
+        layout.prop(settings, "addNewRoots")
         drawCheckedProp(layout, settings, "doQuantize", settings, "quantizeSteps")
         layout.prop(settings, "primaryBoneAxis", expand=True)
         layout.prop(settings, "secondaryBoneAxis", expand=True)
