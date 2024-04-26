@@ -55,6 +55,8 @@ class BRRESMdlImporter():
         self._ensureTevConfigsLoaded(model)
         # load meshes
         self._loadMeshes(model)
+        # give fake users to unused materials
+        self._giveUnusedMaterialsFakeUsers()
 
     @property
     def rigObj(self):
@@ -168,6 +170,13 @@ class BRRESMdlImporter():
         sceneConfigs = {c.uuid: c for c in scene.brres.tevConfigs}
         for (brresConfig, name) in configNames.items():
             sceneConfigs[self.getTevConfigUUID(brresConfig)].name = name
+
+    def _giveUnusedMaterialsFakeUsers(self):
+        """Give fake users to all unused materials for this model."""
+        for matName in self.mats.values():
+            blendMat: bpy.types.Material = bpy.data.materials[matName]
+            if not blendMat.users:
+                blendMat.use_fake_user = True
 
     def _importTex(self, texSettings: TexSettings, tex: mdl0.Texture):
         # image
