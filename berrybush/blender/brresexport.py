@@ -1521,8 +1521,8 @@ class ExportSettingsMixin():
         description="When to add new root bones to BRRES MDLs",
         items=(
             ('ALWAYS', "Always", "Always create a new root bone for each armature, named after the armature"), # pylint: disable=line-too-long
-            ('NECESSARY', "When Necessary", "Only create new root bones when needed for handling unparented assets"), # pylint: disable=line-too-long
-            ('NEVER', "Never", "Never create new root bones, and use existing roots as parents for unparented assets if they exist"), # pylint: disable=line-too-long
+            ('NECESSARY', "When Necessary", "Only create new root bones when needed for assets without all BRRES bone relations (parenting/skinning, visibility) set"), # pylint: disable=line-too-long
+            ('NEVER', "Never", "Never create new root bones, and use existing roots when needed for assets without all BRRES bone relations (parenting/skinning, visibility) set. Note that if multiple root bones exist in the initial armature, one will be chosen arbitrarily as the exported root, and the others will be exported as its children."), # pylint: disable=line-too-long
         ),
         default='NECESSARY',
     )
