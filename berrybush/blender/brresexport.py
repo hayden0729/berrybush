@@ -19,6 +19,7 @@ from .common import (
 )
 from .limiter import ObjectLimiter, ObjectLimiterFactory
 from .material import AlphaSettings, DepthSettings, LightChannelSettings, MiscMatSettings
+from .mesh import MeshSettings
 from .render import BlendImageExtractor
 from .tev import TevSettings, TevStageSettings
 from .texture import TexSettings
@@ -202,6 +203,7 @@ class MeshExporter():
         self.parentMdlExporter = parentMdlExporter
         self.meshes: list[mdl0.Mesh] = []
         self.mesh: bpy.types.Mesh = None
+        self.meshSettings: MeshSettings = None
         self.obj: bpy.types.Object = None
         self._geoInfo = GeometryInfo()
         self._singleBind: mdl0.Joint = None
@@ -213,6 +215,10 @@ class MeshExporter():
         self._singleBind = parentMdlExporter.getParentJoint(obj)
         self._visJoint = parentMdlExporter.getVisJoint(obj)
         self.mesh = mesh
+        try:
+            self.meshSettings = obj.original.data.brres
+        except AttributeError:
+            self.meshSettings = mesh.brres
         self.obj = obj
         # get geometry info
         geoInfo = self._geoInfo
@@ -253,7 +259,7 @@ class MeshExporter():
         brresMesh.vertGroups = geoSlice.exportAttrGroups(self.mesh.name, self.obj.name,
                                                          mat.name, sliceIdx)
         brresMesh.mat = mat
-        brresMesh.drawPrio = self.mesh.brres.drawPrio if self.mesh.brres.enableDrawPrio else 0
+        brresMesh.drawPrio = self.meshSettings.drawPrio if self.meshSettings.enableDrawPrio else 0
         # separate primitives into draw groups
         drawGroupData = self._getDrawGroupData(geoSlice)
         # generate primitive commands
