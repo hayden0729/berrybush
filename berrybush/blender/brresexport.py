@@ -200,7 +200,7 @@ class MeshExporter():
 
     def __init__(self, parentMdlExporter: "BRRESMdlExporter"):
         self.parentMdlExporter = parentMdlExporter
-        self.meshes: list[mdl0.Mesh()] = []
+        self.meshes: list[mdl0.Mesh] = []
         self.mesh: bpy.types.Mesh = None
         self.obj: bpy.types.Object = None
         self._geoInfo = GeometryInfo()
