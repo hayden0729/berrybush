@@ -38,7 +38,7 @@ class LatestVersionChecker():
                 prefs.latestKnownVersion = latestVer
                 prefs.skipThisVersion = False
                 # finally, do the actual check
-                if compareVers(currentVer, latestVer) < 0:
+                if currentVer < latestVer:
                     bpy.ops.brres.show_latest_version('INVOKE_DEFAULT',
                                                       current=currentVer, latest=latestVer, url=url)
 
@@ -107,16 +107,6 @@ def verStr(ver: tuple[int, int, int]):
     return ".".join(str(i) for i in ver)
 
 
-def compareVers(verA: tuple[int, int, int], verB: tuple[int, int, int]):
-    """Return -1 if verA < verB, 0 if verA == verB, and 1 if verA > verB."""
-    for a, b in zip(verA, verB):
-        if a < b:
-            return -1
-        elif a > b:
-            return 1
-    return 0
-
-
 class UpdateBRRES(bpy.types.Operator):
     """Update the active Blend file if it uses an outdated BerryBush version."""
 
@@ -137,21 +127,17 @@ class UpdateBRRES(bpy.types.Operator):
         if sceneVer != currentVer and sceneVer != (0, 0, 0):
             self.report({'INFO'}, f"Loading file saved using BerryBush version {verStr(sceneVer)}"
                                   f" (current version: {verStr(currentVer)})")
-            # 1.1.0
-            if compareVers(sceneVer, (1, 1, 0)) < 0:
+            if sceneVer < (1, 1, 0):
                 # open vertex color gamma updater
                 bpy.ops.brres.update_vert_colors_1_1_0('INVOKE_DEFAULT')
-                sceneVer = (1, 1, 0)
-            # 1.2.0
-            if compareVers(sceneVer, (1, 2, 0)) < 0:
+            if sceneVer < (1, 2, 0):
                 # update texture transform names for fcurves
                 for mat in bpy.data.materials:
                     for tex in mat.brres.textures:
                         tex.transform.name = tex.name
                     for indTf in mat.brres.indSettings.transforms:
                         indTf.transform.name = indTf.name
-            # 1.4.0
-            if compareVers(sceneVer, (1, 4, 0)) < 0:
+            if sceneVer < (1, 4, 0):
                 # update texture transform names for fcurves
                 for scene in bpy.data.scenes:
                     for tevConfig in scene.brres.tevConfigs:
