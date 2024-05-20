@@ -198,7 +198,12 @@ class BRRESMdlImporter():
         t = texSettings.transform
         t.scale, t.rotation, t.translation = tex.scale, np.deg2rad(tex.rot), tex.trans
         if tex.mapMode is mdl0.TexMapMode.UV:
-            texSettings.mapMode = f"{tex.mapMode.name}_{tex.coordIdx + 1}"
+            try:
+                texSettings.mapMode = f"{tex.mapMode.name}_{tex.coordIdx + 1}"
+            except TypeError as e:
+                raise TypeError(f"Texture '{texSettings.name}' of material "
+                                f"'{texSettings.id_data.name}' "
+                                f"uses a coordinate source not yet supported by BerryBush") from e
         else:
             texSettings.mapMode = tex.mapMode.name
         texSettings.wrapModeU, texSettings.wrapModeV = (m.name for m in tex.wrapModes)
