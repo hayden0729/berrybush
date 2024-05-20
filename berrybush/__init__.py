@@ -145,6 +145,9 @@ unusedPropertyGroupRemovalHandler = proputils.getUnusedPropertyGroupRemovalHandl
 
 
 def register():
+    if bpy.app.version >= (3, 5, 0):
+        raise RuntimeError("BerryBush does not support this version of Blender "
+                           "(supported versions: 3.3, 3.4)")
     global ICONS # pylint: disable=global-statement
     ICONS = bpy.utils.previews.new()
     for f in (pathlib.Path(__file__).parent / "blender" / "icons").iterdir():
