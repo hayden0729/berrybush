@@ -15,6 +15,7 @@ from .common import ( # pylint: disable=unused-import
     drawColumnSeparator, enumVal, foreachGet,
     getLoopVertIdcs, getLoopFaceIdcs, getFaceMatIdcs, getLayerData
 )
+from .mesh import MeshSettings
 from .shaders import (
     BRRES_SHADER, POSTPROCESS_SHADER,
     ShaderTevStage, ShaderTexture, ShaderIndTex, ShaderLightChan, ShaderMaterial, ShaderMesh
@@ -722,9 +723,9 @@ class StandardObjectManager(ObjectManager[MaterialManagerT]):
         """Get the Blender materials for an object's mesh."""
         return mesh.materials
 
-    def _getBrresLayerNames(self, mesh: bpy.types.Mesh) -> tuple[list[str], list[str]]:
+    def _getBrresLayerNames(self, brres: MeshSettings) -> tuple[list[str], list[str]]:
         """Get the BRRES color & UV attribute names for a mesh."""
-        return (mesh.brres.meshAttrs.clrs, mesh.brres.meshAttrs.uvs)
+        return (brres.meshAttrs.clrs, brres.meshAttrs.uvs)
 
     def _updateObject(self, obj: bpy.types.Object):
         """Update a RenderObject from a Blender object, or create if nonexistent.
@@ -755,7 +756,7 @@ class StandardObjectManager(ObjectManager[MaterialManagerT]):
         matLoopIdcs = np.zeros(loopIdcs.shape)
         if len(mesh.materials) > 1: # lookup is wasteful if there's only one material
             matLoopIdcs = getFaceMatIdcs(mesh)[getLoopFaceIdcs(mesh)][loopIdcs]
-        layerNames = self._getBrresLayerNames(mesh)
+        layerNames = self._getBrresLayerNames(brres)
         attrs = getLoopAttributeData(mesh, *layerNames)
         renderObject.batches.clear()
         noMat = np.full(loopIdcs.shape, len(mesh.materials) == 0) # all loops w/ no material
@@ -798,7 +799,7 @@ class PreviewObjectManager(StandardObjectManager[MaterialManagerT]):
     def _getMaterials(self, obj: bpy.types.Object, mesh: bpy.types.Mesh):
         return mesh.materials if obj.name.startswith("preview") else [None] * len(mesh.materials)
 
-    def _getBrresLayerNames(self, mesh: bpy.types.Mesh):
+    def _getBrresLayerNames(self, brres: MeshSettings):
         return (["Col"] * gx.MAX_CLR_ATTRS, ["UVMap"] * gx.MAX_UV_ATTRS)
 
 
