@@ -370,7 +370,7 @@ class C14X2(PaletteImageFormat):
 class CMPR(ImageFormat):
 
     _BLK_DIMS = np.array((8, 8))
-    _SUB_DIMS = np.array((4, 4))
+    SUB_DIMS = np.array((4, 4))
     _PLT_FMT = ColorFormat(5, 6, 5)
     _IDX_FMT = ColorFormat(*((2, ) * 16))
 
@@ -413,7 +413,7 @@ class CMPR(ImageFormat):
         subPx[:, :, 3] = np.logical_not(np.logical_and(is2Itp, idcs == 3))
         # now we have all the pixel colors, just have to rearrange from sub shape then block shape
         blkDims = cls._BLK_DIMS
-        subDims = cls._SUB_DIMS
+        subDims = cls.SUB_DIMS
         numSubs = blkDims // subDims # subs per block x/y
         nchans = subPx.shape[-1]
         px = subPx.reshape(-1, *subDims[::-1], nchans)
@@ -425,11 +425,10 @@ class CMPR(ImageFormat):
 
     @classmethod
     def exportImg(cls, px: np.ndarray):
-        original = px
         realDims = (px.shape[1], px.shape[0])
         dims = cls.roundDims(realDims)
         blkDims = cls._BLK_DIMS
-        subDims = cls._SUB_DIMS
+        subDims = cls.SUB_DIMS
         # pad image dimensions to multiples of block dimensions using edge values
         padAmounts = dims - realDims
         px = np.pad(px, ((0, padAmounts[1]), (0, padAmounts[0]), (0, 0)), mode="edge")
@@ -444,7 +443,8 @@ class CMPR(ImageFormat):
         # https://www.sjbrown.co.uk/posts/dxt-compression-techniques/
         # and implemented here:
         # https://github.com/castano/nvidia-texture-tools/blob/master/src/nvtt/QuickCompressDXT.cpp
-        # the "cluster fit" technique is more accurate but just way too slow for python
+        # the "cluster fit" technique is more accurate but i haven't figured out a fast enough
+        # implementation w/ numpy
         # just for reference, cluster fit is described in greater detail here:
         # https://developer.download.nvidia.com/compute/cuda/1.1-Beta/x86_website/projects/dxtc/doc/cuda_dxtc.pdf
         # and implemented here:
