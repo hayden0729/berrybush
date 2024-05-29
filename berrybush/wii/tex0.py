@@ -274,15 +274,18 @@ class RGB5A3(ListableImageFormat):
         output[rgb, :3] = (px[rgb] >> np.array([[10, 5, 0]]) & 0b11111) / 0b11111
         output[rgb, 3] = 1
         output[argb, :3] = (px[argb] >> np.array([[8, 4, 0]]) & 0b1111) / 0b1111
-        # alpha max is (max 3 bit value) + 1 because if alpha is 1, it's just disabled
-        output[argb, 3] = (px[argb, 0] >> 12 & 0b111) / 0b1000
+        # NOTE: previous versions of berrybush used 0b1000 for alpha max (meaning the divisor in the
+        # following equation), but it should actually be 0b111; turns out, setting the opacity
+        # bit to 1 is the same as setting it to 0 and having alpha 0b111 (both are opaque)
+        output[argb, 3] = (px[argb, 0] >> 12 & 0b111) / 0b111
         return output
 
     @classmethod
     def _prepForExport(cls, px: np.ndarray):
-        # alpha max is (max 3 bit value) + 1 because if alpha is 1, it's just disabled
-        px[..., 3] *= 0b1000
-        rgb = px[..., 3].round() == 0b1000
+        # NOTE: previous versions of berrybush used 0b1000 for alpha max
+        # see comment in _prepForImport for more info
+        px[..., 3] *= 0b111
+        rgb = px[..., 3].round() == 0b111
         argb = np.invert(rgb)
         px[argb, :3] *= 0b1111
         px[rgb, :3] *= 0b11111
