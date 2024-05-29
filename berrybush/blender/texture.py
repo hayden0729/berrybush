@@ -317,6 +317,12 @@ class ImgSettings(bpy.types.PropertyGroup):
 
     mipmaps: MipmapSlot.CustomIDCollectionProperty()
 
+    cmprPreserveTransparent: bpy.props.BoolProperty(
+        name="Preserve Transparent Colors",
+        description="Attempt to preserve the colors of transparent pixels (may worsen compression artifacts for nearby opaque pixels). Only applies to CMPR", # pylint: disable=line-too-long
+        default=False
+    )
+
     warnSupSize: WarningSuppressionProperty()
 
 
@@ -433,6 +439,8 @@ class ImgPanel(TexSubPanel):
                     imgCol.use_property_split = True
                     imgCol.use_property_decorate = False
                     imgCol.prop(activeImg.brres, "fmt")
+                    if activeImg.brres.fmt == 'CMPR':
+                        imgCol.prop(activeImg.brres, "cmprPreserveTransparent")
             except IndexError: # active slot out of bounds
                 layout.template_ID_preview(texSettings, "imgAdder",
                                            new="image.new", open="image.open")
