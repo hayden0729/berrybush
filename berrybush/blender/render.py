@@ -509,7 +509,7 @@ class RenderMaterial:
         # alpha settings
         alphaSettings = brres.alphaSettings
         shaderMat.enableBlend = alphaSettings.enableBlendOp
-        shaderMat.blendSubtract = alphaSettings.blendOp == 'SUBTRACT'
+        shaderMat.blendSubtract = alphaSettings.blendOp == '-'
         shaderMat.blendSrcFac = BLEND_FACS[alphaSettings.blendSrcFactor]
         shaderMat.blendDstFac = BLEND_FACS[alphaSettings.blendDstFactor]
         shaderMat.enableBlendLogic = alphaSettings.enableLogicOp
