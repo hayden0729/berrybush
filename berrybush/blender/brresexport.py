@@ -1079,7 +1079,6 @@ class BRRESPatExporter(BRRESAnimExporter[pat0.PAT0]):
             except KeyError:
                 continue
             texAnim = pat0.TexAnim()
-            matAnim.texAnims[texIdx] = texAnim
             texImgs = mat.brres.textures[texIdx].imgs
             for texImg in texImgs:
                 img = texImg.img
@@ -1092,13 +1091,16 @@ class BRRESPatExporter(BRRESAnimExporter[pat0.PAT0]):
             minFrame, maxFrame = fcurve.range()
             texAnim.length = int(np.ceil(maxFrame - minFrame))
             prevVal: int = None
+            numImgs = len(texImgs)
             for frameIdx in np.linspace(minFrame, maxFrame, int(np.ceil(texAnim.length)) + 1):
                 frameVal = fcurve.evaluate(frameIdx)
-                if frameVal != prevVal:
+                if frameVal != prevVal and 1 <= frameVal <= numImgs:
                     frameIdcs.append(frameIdx - frameStart)
                     frameVals.append(frameVal - 1)
                     prevVal = frameVal
             texAnim.keyframes = np.array([frameIdcs, frameVals, [0] * len(frameIdcs)]).T
+            if frameVals: # don't add if all keyframes are out of bounds
+                matAnim.texAnims[texIdx] = texAnim
         # if mat anim is non-empty (relevant fcurves were found), update pat anim
         if matAnim.texAnims:
             patAnim = self.getAnim(track.name, action)
