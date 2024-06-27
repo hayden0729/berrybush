@@ -206,7 +206,6 @@ class BlendImageExtractor:
             means = np.repeat(means[:, np.newaxis], px.shape[1], axis=1)
             ignoredPx = np.logical_not(notIgnoredPx)
             px[ignoredPx, :3] = means[ignoredPx, :3]
-            print(px.shape)
             px = tex0.unBlockSplit(px.reshape(blockShape), dims)
         # pad all image dimensions to at least 1 (render result is 0x0 if unset) & channels to 4
         px = np.pad(px, ((0, dims[1] == 0), (0, dims[0] == 0), (0, 4 - img.channels)))
