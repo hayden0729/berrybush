@@ -772,7 +772,7 @@ class StandardObjectManager(ObjectManager[MaterialManagerT]):
         matLoopIdcs = np.zeros(loopIdcs.shape)
         if len(mesh.materials) > 1: # lookup is wasteful if there's only one material
             matLoopIdcs = getFaceMatIdcs(mesh)[getLoopFaceIdcs(mesh)][loopIdcs]
-        layerNames = self._getBrresLayerNames(brres)
+        layerNames = self._getBrresLayerNames(brres) if brres else ()
         attrs = getLoopAttributeData(mesh, *layerNames)
         renderObject.batches.clear()
         noMat = np.full(loopIdcs.shape, len(mesh.materials) == 0) # all loops w/ no material
