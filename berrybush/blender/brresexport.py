@@ -327,8 +327,8 @@ class MeshExporter():
         cmd = gx.DrawTriangles(numLoops)
         cmdAttrs = (cmd.psns, cmd.nrms, cmd.clrs, cmd.uvs)
         for groups, cmdAttr in zip(geoSlice.attrExporters.values(), cmdAttrs):
-            for groupExp, cmdData in zip(groups.values(), cmdAttr):
-                cmdData[:] = groupExp.loopDataIdcs[dgUsedLoopIdcs]
+            for i, groupExp in groups.items():
+                cmdAttr[i] = groupExp.loopDataIdcs[dgUsedLoopIdcs]
         # then set up matrix attrs (for skinning)
         if dgDfs:
             # we have absolute df indices, but we need relative to this dg's df list
