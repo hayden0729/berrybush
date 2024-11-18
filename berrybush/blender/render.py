@@ -193,6 +193,7 @@ class BlendImageExtractor:
         px = np.array(img.pixels, dtype=np.float32).reshape(dims[1], dims[0], img.channels)
         if not img.brres.cmprPreserveTransparent and img.brres.fmt == 'CMPR':
             # ignore transparent pixel colors by setting them to block averages
+            px = tex0.CMPR.padImg(px)
             px = tex0.blockSplit(px, tex0.CMPR.SUB_DIMS)
             blockShape = px.shape
             px = px.reshape(px.shape[0], -1, px.shape[-1])
@@ -206,7 +207,8 @@ class BlendImageExtractor:
             means = np.repeat(means[:, np.newaxis], px.shape[1], axis=1)
             ignoredPx = np.logical_not(notIgnoredPx)
             px[ignoredPx, :3] = means[ignoredPx, :3]
-            px = tex0.unBlockSplit(px.reshape(blockShape), dims)
+            px = tex0.unBlockSplit(px.reshape(blockShape), tex0.CMPR.roundDims(dims))
+            px = px[:dims[1], :dims[0]]
         # pad all image dimensions to at least 1 (render result is 0x0 if unset) & channels to 4
         px = np.pad(px, ((0, dims[1] == 0), (0, dims[0] == 0), (0, 4 - img.channels)))
         if setLargeToBlack and max(dims) > gx.MAX_TEXTURE_SIZE:

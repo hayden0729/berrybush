@@ -423,16 +423,22 @@ class CMPR(ImageFormat):
         # finally, crop dims & return
         return px[:realDims[1], :realDims[0]]
 
+
     @classmethod
-    def exportImg(cls, px: np.ndarray):
+    def padImg(cls, px: np.ndarray):
         realDims = (px.shape[1], px.shape[0])
         dims = cls.roundDims(realDims)
+        padAmounts = dims - realDims
+        # pad image dimensions to multiples of block dimensions by reflecting on edges
+        # (this may distort the compression slightly but it's good enough)
+        return np.pad(px, ((0, padAmounts[1]), (0, padAmounts[0]), (0, 0)), mode="symmetric")
+
+    @classmethod
+    def exportImg(cls, px: np.ndarray):
+        px = cls.padImg(px)
+        # split into tex0 blocks, then sub-blocks
         blkDims = cls._BLK_DIMS
         subDims = cls.SUB_DIMS
-        # pad image dimensions to multiples of block dimensions using edge values
-        padAmounts = dims - realDims
-        px = np.pad(px, ((0, padAmounts[1]), (0, padAmounts[0]), (0, 0)), mode="edge")
-        # split into tex0 blocks, then sub-blocks
         numSubs = blkDims // subDims # subs per block x/y
         nchans = 4
         px = blockSplit(px, blkDims) # we now have block formation, but need sub formation
