@@ -287,7 +287,6 @@ class Joint(Tree):
         self._srt = tf.Transformation(3)
         self._mtxCache: dict[tf.AbsMtxGenerator, np.ndarray] = {}
         self._invMtxCache: dict[tf.AbsMtxGenerator, np.ndarray] = {}
-        self._absMtxCache: dict[tf.AbsMtxGenerator, np.ndarray] = {}
         self._d = Deformer({self: 1.0})
 
     @property
@@ -313,23 +312,39 @@ class Joint(Tree):
     def setSRT(self, s: np.ndarray = None, r: np.ndarray = None, t: np.ndarray = None):
         """Update any of this joint's transformation vectors with new values."""
         self._srt.set(s, r, t)
-        self._mtxCache = {}
-        self._invMtxCache = {}
         for joint in self.deepChildren():
-            joint._absMtxCache = {}
+            joint._mtxCache = {}
+            joint._invMtxCache = {}
+
+    def setMtxCache(
+        self,
+        mtxGen: type[tf.AbsMtxGenerator],
+        mtx: np.ndarray | None = None,
+        inv: np.ndarray | None = None,
+    ):
+        """Overwrite any of this joint's cached matrices with new values.
+        
+        This is unnecessary in most cases, as these caches are automatically recalculated when
+        necessary. It's used when importing in case the imported matrices don't match up with the
+        transforms (which can happen in models created with other tools, e.g., maybe BrawlCrate?)
+        """
+        if mtx is not None:
+            self._mtxCache[mtxGen] = mtx
+        if inv is not None:
+            self._invMtxCache[mtxGen] = inv
 
     def mtx(self, model: "MDL0"):
-        """Relative matrix for this joint, calculated based on a model's settings."""
+        """Absolute matrix for this joint, calculated based on a model's settings."""
         mtxGen = model.mtxGen3D
         try:
             return self._mtxCache[mtxGen].copy()
         except KeyError:
-            mtx = mtxGen.genMtx(self._srt)
+            mtx = mtxGen.absMtx([(j._srt, j.segScaleComp) for j in self.ancestors()])
             self._mtxCache[mtxGen] = mtx
             return mtx
 
     def invMtx(self, model: "MDL0"):
-        """Inverse relative matrix for this joint, calculated based on a model's settings."""
+        """Inverse absolute matrix for this joint, calculated based on a model's settings."""
         mtxGen = model.mtxGen3D
         try:
             return self._invMtxCache[mtxGen].copy()
@@ -338,25 +353,17 @@ class Joint(Tree):
             self._invMtxCache[mtxGen] = mtx
             return mtx
 
-    def absMtx(self, model: "MDL0"):
-        """Absolute matrix for this joint, calculated based on a model's settings."""
-        mtxGen = model.mtxGen3D
-        try:
-            return self._absMtxCache[mtxGen].copy()
-        except KeyError:
-            mtx = mtxGen.absMtx([(j._srt, j.segScaleComp) for j in self.ancestors()])
-            self._absMtxCache[mtxGen] = mtx
-            return mtx
-
     def addChild(self, child: Self):
         super().addChild(child)
         for joint in child.deepChildren():
-            joint._absMtxCache = {}
+            joint._mtxCache = {}
+            joint._invMtxCache = {}
 
     def removeChild(self, child: Self):
         super().removeChild(child)
         for joint in child.deepChildren():
-            joint._absMtxCache = {}
+            joint._mtxCache = {}
+            joint._invMtxCache = {}
 
 
 class JointFlags(Flag):
@@ -386,6 +393,8 @@ class JointReader(JointSerializer["MDL0Reader"], Reader, StrPoolReadMixin):
         super().__init__(parent, offset)
         self._bbParentIdx: int = None
         self._parentOffset: int = None
+        self._mtx: np.ndarray = None
+        self._invMtx: np.ndarray = None
 
     def unpack(self, data: bytes):
         super().unpack(data)
@@ -397,6 +406,8 @@ class JointReader(JointSerializer["MDL0Reader"], Reader, StrPoolReadMixin):
         joint.bbMode = BillboardMode(unpackedData[6])
         self._bbParentIdx = unpackedData[7] if JointFlags.HAS_BB_PARENT in flags else None
         joint.setSRT(unpackedData[8:11], unpackedData[11:14], unpackedData[14:17])
+        self._mtx = np.reshape([*unpackedData[28:40], 0, 0, 0, 1], (4, 4))
+        self._invMtx = np.reshape([*unpackedData[40:52], 0, 0, 0, 1], (4, 4))
         self._parentOffset = self.offset + unpackedData[23] if unpackedData[23] != 0 else None
         return self
 
@@ -408,6 +419,9 @@ class JointReader(JointSerializer["MDL0Reader"], Reader, StrPoolReadMixin):
             self._data.bbParent = tuple(jrs)[self._bbParentIdx].getInstance()
         if self._parentOffset is not None:
             self._data.parent = next(j.getInstance() for j in jrs if j.offset == self._parentOffset)
+
+    def updateMatrixCache(self, mtxGen: type[tf.AbsMtxGenerator]):
+        self._data.setMtxCache(mtxGen, mtx=self._mtx, inv=self._invMtx)
 
 
 class JointWriter(JointSerializer["MDL0Writer"], Writer, StrPoolWriteMixin):
@@ -472,8 +486,8 @@ class JointWriter(JointSerializer["MDL0Writer"], Writer, StrPoolWriteMixin):
         # pack first 3 rows of absolute transform matrix & inverse (last row assumed to be 0 0 0 1)
         # note: these matrices don't seem to have any effect
         # (looks like the wii only cares about the srt vectors)
-        mtx = self._data.absMtx(self.parentSer.getInstance())
-        inv = np.linalg.inv(mtx)
+        mtx = self._data.mtx(self.parentSer.getInstance())
+        inv = self._data.invMtx(self.parentSer.getInstance())
         mtx = mtx.flatten()[:12]
         inv = inv.flatten()[:12]
         minCoord = maxCoord = [0, 0, 0] # TODO: min/max coords
@@ -494,7 +508,7 @@ class Deformer(Mapping[Joint, float]):
 
     def mtx(self, model: "MDL0") -> np.ndarray:
         """Matrix for this deformer, calculated based on a model's settings."""
-        return np.sum(j.absMtx(model) * w for j, w in self._weights.items())
+        return np.sum(j.mtx(model) * w for j, w in self._weights.items())
 
     def pose(self, model: "MDL0", pose: dict[Joint, np.ndarray]):
         """Matrix for this deformer based on a pose.
@@ -2264,18 +2278,21 @@ class MDL0Reader(MDL0Serializer, SubfileReader):
     def _updateInstance(self):
         super()._updateInstance()
         if JointReader in self._sections:
+            # set root joint
             joints: list[Joint] = self._getSectionInstances(JointReader)
             rootJoints = [j for j in joints if not j.parent]
             self._data.rootJoint = rootJoints[0]
             if len(rootJoints) > 1:
                 raise ValueError("BRRES models cannot have multiple root joints")
+            # make joints use unpacked matrices by default (rather than recalculating)
+            print("updating matrix caches")
+            for jointReader in self._sections[JointReader].values():
+                jointReader.updateMatrixCache(self._data.mtxGen3D)
         self._data.tevConfigs = unique(self._getSectionInstances(TEVConfigReader))
         self._data.mats = self._getSectionInstances(MaterialReader)
         self._data.meshes = self._getSectionInstances(MeshReader)
         for groupReader in (PsnGroupReader, NrmGroupReader, ClrGroupReader, UVGroupReader):
             self._data.vertGroups[groupReader.DATA_TYPE] = self._getSectionInstances(groupReader)
-
-
 
 class MDL0Writer(MDL0Serializer, SubfileWriter):
 

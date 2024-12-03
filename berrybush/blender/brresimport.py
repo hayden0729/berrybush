@@ -694,7 +694,7 @@ class BRRESMdlImporter():
             initialScales.append(joint.scale)
             # transform bone
             joint.setSRT(s=(1, 1, 1))
-            jointMtx = joint.absMtx(model)
+            jointMtx = joint.mtx(model)
             boneMtx = Matrix(jointMtx)
             boneMtx.translation /= importScale
             rotMtx = Matrix(tf.Rotation.extractMtx(jointMtx))
