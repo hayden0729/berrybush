@@ -245,10 +245,7 @@ class MeshExporter():
     def generateMesh(self, mat: mdl0.Material, geoSlice: GeometrySlice, sliceIdx: int):
         """Generate a BRRES mesh & vertex groups for some geometry."""
         sliceSuffix = f"_{sliceIdx}" if sliceIdx else ""
-        name = self.obj.name + sliceSuffix
-        if len(self._matSlots) >= 2:
-            name = f"{name}__{mat.name}"
-        brresMesh = mdl0.Mesh(name)
+        brresMesh = mdl0.Mesh(self.obj.name + sliceSuffix)
         if self._singleBind:
             brresMesh.singleBind = self._singleBind.deformer
         brresMesh.visJoint = self._visJoint
