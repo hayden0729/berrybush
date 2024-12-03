@@ -47,7 +47,7 @@ ICONS: bpy.utils.previews.ImagePreviewCollection
 bl_info = {
     "name" : "BRRES format (BerryBush)",
     "author": "hayden0729",
-    "version": (1, 4, 4),
+    "version": (1, 4, 5),
     "blender" : (3, 3, 0),
     "location": "File > Import-Export",
     "description": "NSMBW focused BRRES support",
