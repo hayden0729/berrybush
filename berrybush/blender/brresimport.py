@@ -443,7 +443,7 @@ class BRRESMdlImporter():
             vertMats = []
             faceMats = []
             cmdAttrs = ("psns", "nrms", "clrs", "uvs")
-            groupStartIdcs: dict[mdl0.VertexAttrGroup, int] = {}
+            groupStartIdcs: dict[mdl0.VertexAttrGroup, dict[int, int]] = {}
             for meshIdx, mesh in enumerate(meshes):
                 # add commands & vertex group data
                 meshCmds = list(mesh.cmds)
@@ -459,21 +459,22 @@ class BRRESMdlImporter():
                         groupData = group.arr.copy()
                         if isinstance(group, mdl0.ClrGroup):
                             groupData[:, :3] **= 2.2
+                        # add offsets to commands to compensate for expanded vertex groups
+                        slotStartIdcsForThisGroup = groupStartIdcs.setdefault(group, {})
                         try:
                             curSlotData = slotData[s]
-                            # add offsets to commands to compensate for expanded vertex groups
                             try:
-                                cmdOffset = groupStartIdcs[group]
+                                cmdOffset = slotStartIdcsForThisGroup[s]
                             except KeyError:
-                                cmdOffset = groupStartIdcs[group] = len(curSlotData)
+                                # group isn't present in slot data yet, add it
+                                cmdOffset = slotStartIdcsForThisGroup[s] = len(curSlotData)
+                                slotData[s] = np.concatenate((curSlotData, groupData))
                             for cmd in meshCmds:
                                 getattr(cmd, a)[s] += cmdOffset
-                            # update vertex data
-                            slotData[s] = np.concatenate((curSlotData, groupData))
                         except KeyError:
-                            # this is the first group used - no offset necessary
+                            # this is the first group used in slot data - no offset necessary
+                            slotStartIdcsForThisGroup[s] = 0
                             slotData[s] = groupData
-                            groupStartIdcs[group] = 0
                 # add material
                 blendMat = bpy.data.materials[self.mats[mesh.mat]] if mesh.mat is not None else None
                 blendMesh.materials.append(blendMat)
