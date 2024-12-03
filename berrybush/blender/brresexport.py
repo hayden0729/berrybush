@@ -208,6 +208,7 @@ class MeshExporter():
         self._geoInfo = GeometryInfo()
         self._singleBind: mdl0.Joint = None
         self._visJoint: mdl0.Joint = None
+        self._matSlots: dict[mdl0.Material, np.ndarray] = {}
 
     def update(self, mesh: bpy.types.Mesh, obj: bpy.types.Object):
         """Update this exporter and its parent with BRRES data based on a mesh object."""
@@ -228,18 +229,10 @@ class MeshExporter():
             geoInfo.updateSkinning(mesh, obj, parentMdlExporter)
         geoInfo.simplifyData()
         # generate brres mesh for each material used
+        self._updateMaterialSlots()
         maxAttrGroupLen = mdl0.VertexAttrGroup.MAX_LEN
-        usedSlots = usedMatSlots(obj, mesh)
-        for matSlot in obj.material_slots:
-            blendMat = matSlot.material
-            if not blendMat:
-                continue
-            # note that material is always exported, regardless of whether it's used for geometry
-            # (handy for working around game hardcodes that need materials to exist in certain ways)
-            mat = parentMdlExporter.exportMaterial(blendMat)
-            if matSlot not in usedSlots:
-                continue
-            curMatTriLoopIdcs = geoInfo.triLoopIdcs[geoInfo.triMatIdcs == matSlot.slot_index]
+        for mat, slotIndices in self._matSlots.items():
+            curMatTriLoopIdcs = geoInfo.triLoopIdcs[np.isin(geoInfo.triMatIdcs, slotIndices)]
             for sliceIdx, triStart in enumerate(range(0, len(curMatTriLoopIdcs), maxAttrGroupLen)):
                 usedTriLoopIdcs = curMatTriLoopIdcs[triStart : triStart + maxAttrGroupLen]
                 geoSlice = GeometrySlice(geoInfo, usedTriLoopIdcs)
@@ -252,7 +245,10 @@ class MeshExporter():
     def generateMesh(self, mat: mdl0.Material, geoSlice: GeometrySlice, sliceIdx: int):
         """Generate a BRRES mesh & vertex groups for some geometry."""
         sliceSuffix = f"_{sliceIdx}" if sliceIdx else ""
-        brresMesh = mdl0.Mesh(f"{self.obj.name}__{mat.name}{sliceSuffix}")
+        name = self.obj.name + sliceSuffix
+        if len(self._matSlots) >= 2:
+            name = f"{name}__{mat.name}"
+        brresMesh = mdl0.Mesh(name)
         if self._singleBind:
             brresMesh.singleBind = self._singleBind.deformer
         brresMesh.visJoint = self._visJoint
@@ -267,6 +263,21 @@ class MeshExporter():
             dg = self._exportDrawGroup(mat, geoSlice, dgDfs, dgFaces)
             brresMesh.drawGroups.append(dg)
         return brresMesh
+
+    def _updateMaterialSlots(self):
+        slots: dict[mdl0.Material, list[int]] = {}
+        usedSlots = usedMatSlots(self.obj, self.mesh)
+        for matSlot in self.obj.material_slots:
+            blendMat = matSlot.material
+            if not blendMat:
+                continue
+            # note that material is always exported, regardless of whether it's used for geometry
+            # (handy for working around game hardcodes that need materials to exist in certain ways)
+            mat = self.parentMdlExporter.exportMaterial(blendMat)
+            if matSlot not in usedSlots:
+                continue
+            slots.setdefault(mat, []).append(matSlot.slot_index)
+        self._matSlots = {k: np.array(v) for k, v in slots.items()}
 
     def _getDrawGroupData(self, geoSlice: GeometrySlice):
         """Separate a geometry slice into tuples representing BRRES mesh draw groups.
@@ -391,6 +402,12 @@ class BRRESMdlExporter():
             if parent is None or parent.type != 'ARMATURE' or parent.data.name != arm.name:
                 continue
             self.exportMeshObj(obj)
+        # fix duplicate mesh names by appending material names if necessary
+        usedMeshNames: set[str] = set()
+        for mesh in self.model.meshes:
+            if mesh.name in usedMeshNames:
+                mesh.name = f"{mesh.name}__{mesh.mat.name}"
+            usedMeshNames.add(mesh.name)
         # remove unused joints if enabled
         if settings.removeUnusedBones:
             self._removeUnusedJoints()
