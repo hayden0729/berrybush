@@ -22,6 +22,7 @@ import bpy
 import bpy.utils.previews
 # internal imports
 from .blender import (
+    animpreview,
     backup,
     bone,
     brresexport,
@@ -129,6 +130,7 @@ classes = (
     brresimport.ImportBRRES,
     brresexport.ExportBRRES,
     verify.VerifyBRRES,
+    animpreview.PreviewAnimation,
     updater.ShowLatestVersion,
     updater.UpdateBRRES,
     updater.UpdateVertColors1_1_0,
@@ -165,6 +167,7 @@ def register():
     bpy.types.TOPBAR_MT_file_import.append(brresimport.drawOp)
     bpy.types.TOPBAR_MT_file_export.append(brresexport.drawOp)
     bpy.types.VIEW3D_MT_object.append(verify.drawOp)
+    bpy.types.NLA_MT_view.append(animpreview.drawOp)
     bpy.app.handlers.load_post.append(updater.update)
     bpy.app.handlers.load_post.append(unusedPropertyGroupRemovalHandler)
     bpy.app.handlers.load_post.append(updater.checkLatestVer)
@@ -177,6 +180,7 @@ def unregister():
     bpy.app.handlers.save_pre.remove(updater.saveVer)
     bpy.app.handlers.load_post.remove(unusedPropertyGroupRemovalHandler)
     bpy.app.handlers.load_post.remove(updater.update)
+    bpy.types.NLA_MT_view.remove(animpreview.drawOp)
     bpy.types.VIEW3D_MT_object.remove(verify.drawOp)
     bpy.types.TOPBAR_MT_file_export.remove(brresexport.drawOp)
     bpy.types.TOPBAR_MT_file_import.remove(brresimport.drawOp)
