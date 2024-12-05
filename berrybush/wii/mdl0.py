@@ -2285,7 +2285,6 @@ class MDL0Reader(MDL0Serializer, SubfileReader):
             if len(rootJoints) > 1:
                 raise ValueError("BRRES models cannot have multiple root joints")
             # make joints use unpacked matrices by default (rather than recalculating)
-            print("updating matrix caches")
             for jointReader in self._sections[JointReader].values():
                 jointReader.updateMatrixCache(self._data.mtxGen3D)
         self._data.tevConfigs = unique(self._getSectionInstances(TEVConfigReader))
