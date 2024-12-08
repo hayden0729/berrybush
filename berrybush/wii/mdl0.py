@@ -1950,8 +1950,7 @@ class MeshSerializer(Serializer[_MDL0_SER_T, Mesh]):
     _STRCT = Struct(">Iii 4s 4s 4s 2I i 2I i IIiIII 14h i")
     _DEF_INFO_OFFSET = 24 # offset to def info in header
     _DATA_INFO_OFFSET = 36 # offset to data info in header
-    _DEF_PAD = 96
-    _DEF_SIZE = 128 + _DEF_PAD # this is just a fixed size to which the vertex def is padded on pack
+    _DEF_SIZE = 224
 
 
 class MeshReader(MeshSerializer["MDL0Reader"], Reader, StrPoolReadMixin):
@@ -2119,7 +2118,8 @@ class MeshWriter(MeshSerializer["MDL0Writer"], Writer, StrPoolWriteMixin):
         singleBind = -1 if mesh.singleBind is None else allDeformerIdcs[mesh.singleBind]
         header = self._STRCT.pack(self._size, self.parentSer.offset - self.offset, singleBind,
                                   *(d.reg.bits.pack() for d in decs), counts.reg.bits.pack(),
-                                  self._DEF_SIZE, self._DEF_SIZE - self._DEF_PAD,
+                                  self._DEF_SIZE,
+                                  self._DEF_SIZE, # this is supposed to be the size of the vertex data minus padding; not sure how to calculate this properly, as it apparently depends on the number of vertex attributes used (usually 128, but see bgA_A402), but this seems to work fine
                                   preCmdSize - self._DEF_INFO_OFFSET,
                                   len(packedVertexData), len(packedVertexData),
                                   preCmdSize + self._DEF_SIZE - self._DATA_INFO_OFFSET,
