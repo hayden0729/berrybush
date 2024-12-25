@@ -16,12 +16,20 @@ class PreviewAnimation(bpy.types.Operator):
     )
 
     def execute(self, context: bpy.types.Context):
-        for obj in chain(bpy.data.objects.values(), bpy.data.materials.values()):
-            obj: bpy.types.Object | bpy.types.Material
-            if obj.animation_data is not None:
-                for track in obj.animation_data.nla_tracks:
+        frame_start = frame_end = 0
+        for obj in chain(bpy.data.objects.values(), bpy.data.materials.values(), bpy.data.armatures.values()):
+            animData: bpy.types.AnimData | None = obj.animation_data
+            if animData is not None:
+                for track in animData.nla_tracks:
                     track: bpy.types.NlaTrack
-                    track.is_solo = track.name == self.name
+                    solo = track.name == self.name
+                    if track.is_solo != solo:
+                        track.is_solo = solo
+                    if track.strips:
+                        frame_start = min(frame_end, track.strips[0].frame_start)
+                        frame_end = max(frame_end, track.strips[-1].frame_end)
+        context.scene.frame_start = int(frame_start)
+        context.scene.frame_end = int(frame_end)
         return {'FINISHED'}
 
     def invoke(self, context: bpy.types.Context, event: bpy.types.Event):
