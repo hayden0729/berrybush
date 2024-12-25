@@ -431,7 +431,7 @@ class BRRESMdlImporter():
                 parent: bpy.types.Bone = obj.parent.data.bones[obj.parent_bone]
                 parentMtx = MTX_FROM_BRRES @ Matrix(meshRep.singleBind.mtx(self.model))
                 parentMtx.translation /= importScale
-                parentMtx = parent.matrix_local.inverted() @ parentMtx
+                parentMtx = parent.matrix_local.inverted_safe() @ parentMtx
                 headAdjustMtx = Matrix.Translation((0, -parent.length, 0))
                 obj.matrix_parent_inverse = headAdjustMtx @ parentMtx @ MTX_TO_BONE.to_4x4()
             # join data from meshes in batch
@@ -565,13 +565,13 @@ class BRRESMdlImporter():
                             restFix = d.mtx(self.model)
                         else:
                             scaledPose = d.pose(self.model, self._scaledJointMtcs)
-                            restFix = np.linalg.inv(scaledPose)
+                            restFix = tf.invertSafeNp(scaledPose)
                         dVerts = verts[dgVertIdcs][deformerIdcs == i]
                         dVerts = np.pad(dVerts, ((0, 0), (0, 1)), constant_values=1) @ restFix.T
                         verts[vertIdx : vertIdx + dgLen][deformerIdcs == i] = dVerts[:, :3]
                         if hasNormals:
                             dNrms = vertNormals[dgVertIdcs][deformerIdcs == i]
-                            dNrms = dNrms @ np.linalg.inv(restFix)[:3, :3]
+                            dNrms = dNrms @ tf.invertSafeNp(restFix)[:3, :3]
                             vertNormals[vertIdx : vertIdx + dgLen][deformerIdcs == i] = dNrms
                     vertIdx += dgLen
                 # re-apply positions because of the multi-weight adjustment
@@ -758,7 +758,7 @@ class BRRESMdlImporter():
         # inherit rest pose relative to parent
         rest = bone.matrix_local
         if joint.parent is not None:
-            rest = bone.parent.matrix_local.inverted() @ rest
+            rest = bone.parent.matrix_local.inverted_safe() @ rest
         control.matrix_parent_inverse = rest
         # inherit rotation
         # (have to use drivers instead of copy rotation constraint because that can mess w/ shear)
@@ -802,7 +802,7 @@ class BRRESMdlImporter():
         inheritConstraint = bone.constraints.new('CHILD_OF')
         inheritConstraint.name = "Segment Scale Compensate (Main)"
         inheritConstraint.target = self._sscControl(parent)
-        inheritConstraint.inverse_matrix = bone.bone.parent.matrix_local.inverted()
+        inheritConstraint.inverse_matrix = bone.bone.parent.matrix_local.inverted_safe()
         # that inheritance messes up translation, which we just want to be the original translation
         # we could fix this by disabling translation in the child of constraint we just added,
         # but that has side-effects to shear and rotation because of constraints' limits (relevant:
@@ -1023,7 +1023,7 @@ class BRRESChrImporter(BRRESAnimImporter[chr0.CHR0]):
                     frames = [a.interpolate(fRange) for a in jAnim.rot]
                     frames = np.array(frames, dtype=float).T
                     mtcs = tf.Rotation.mtx(frames)[..., :-1, :-1]
-                    invRotMtx = np.linalg.inv(poseBone.bone.matrix)
+                    invRotMtx = tf.invertSafeNp(poseBone.bone.matrix)
                     adjustMtx = mtxBoneFromBRRES if poseBone.parent else MTX_FROM_BONE
                     mtcs = invRotMtx @ adjustMtx @ mtcs @ mtxBoneToBRRES
                     frames = np.deg2rad(tf.decompose3DRotation(mtcs))

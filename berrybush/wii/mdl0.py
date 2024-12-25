@@ -349,7 +349,7 @@ class Joint(Tree):
         try:
             return self._invMtxCache[mtxGen].copy()
         except KeyError:
-            mtx = np.linalg.inv(self.mtx(model))
+            mtx = tf.invertSafeNp(self.mtx(model))
             self._invMtxCache[mtxGen] = mtx
             return mtx
 

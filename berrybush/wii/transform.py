@@ -11,6 +11,17 @@ def readonlyView(arr: np.ndarray):
     return output
 
 
+def invertSafeNp(mtx: np.ndarray):
+    try:
+        return np.linalg.inv(mtx)
+    except np.linalg.LinAlgError:
+        identity = np.identity(mtx.shape[0])
+        try:
+            return np.linalg.inv(mtx + identity * np.finfo(float).eps)
+        except np.linalg.LinAlgError:
+            return identity
+
+
 # default scale, rotation, & translation values
 IDENTITY_S = 1
 IDENTITY_R = 0
@@ -319,7 +330,7 @@ class StdMtxGen3D(AbsMtxGenerator):
         parent = None
         for srt, segScaleComp in srts:
             if segScaleComp and parent is not None:
-                cmp = np.linalg.inv(Scaling.mtx(parent.s)) # parent compensation matrix
+                cmp = invertSafeNp(Scaling.mtx(parent.s)) # parent compensation matrix
                 mtx = mtx @ Translation.mtx(srt.t) @ cmp @ Rotation.mtx(srt.r) @ Scaling.mtx(srt.s)
             else:
                 mtx = mtx @ cls.genMtx(srt)

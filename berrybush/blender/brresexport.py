@@ -114,7 +114,7 @@ class GeometryInfo():
         # (for instance, imagine a deformer for 2 equally weighted joints w/ opposite rotations)
         mdl = mdlExporter.model
         dfMtcs = np.array([df.mtx(mdl) if len(df) == 1 else np.identity(4) for df in self.dfs])
-        invDfMtcs = np.array([np.linalg.inv(m) for m in dfMtcs])
+        invDfMtcs = np.array([tf.invertSafeNp(m) for m in dfMtcs])
         loopDfMtcs = dfMtcs[self.loopDfIdcs]
         invLoopDfMtcs = invDfMtcs[self.loopDfIdcs]
         padPsns = np.pad(self.loopPsns, ((0, 0), (0, 1)), constant_values=1) # pad for 4x4 matmul
@@ -672,7 +672,7 @@ class BRRESMdlExporter():
             parentBone: bpy.types.Bone = obj.parent.data.bones[obj.parent_bone]
             if parentBone.use_relative_parent:
                 # "relative parenting" means parent matrix isn't accounted for automatically
-                modelMtx = parentBone.matrix_local.inverted() @ modelMtx
+                modelMtx = parentBone.matrix_local.inverted_safe() @ modelMtx
             else:
                 # object is positioned relative to bone tail, but we want relative to head
                 headCorrection = Matrix.Translation((0, parentBone.length, 0))
@@ -751,7 +751,7 @@ class BRRESMdlExporter():
     def _exportJoints(self, armObj: bpy.types.Object):
         parentResExporter = self.parentResExporter
         mtcs = {bone: bone.matrix for bone in armObj.pose.bones}
-        mtcs = {bone: (mtx, mtx.inverted()) for bone, mtx in mtcs.items()}
+        mtcs = {bone: (mtx, mtx.inverted_safe()) for bone, mtx in mtcs.items()}
         localScales = {} # for segment scale compensate calculations
         prevRots = {} # for euler compatibility
         for poseBone in armObj.pose.bones:
@@ -934,7 +934,7 @@ class BRRESChrExporter(BRRESAnimExporter[chr0.CHR0]):
                 mtx = bone.matrix
                 mtcsChanged[bone] = mtxChanged = mtx != oldMtx
                 if mtxChanged:
-                    mtcs[bone] = (mtx.copy(), mtx.inverted() if hasChild[bone] else None)
+                    mtcs[bone] = (mtx.copy(), mtx.inverted_safe() if hasChild[bone] else None)
             # save animation data for bones w/ changed matrices or changed parent matrices
             # (this ensures all possible modes of inheritance & ssc cases are covered)
             for bone, frameVals in jointFrames.items():
@@ -1435,7 +1435,7 @@ class BRRESExporter():
         if bone.bone.inherit_scale == 'NONE' and parent:
             parentScale = Matrix.LocRotScale(None, None, localScales[parent])
             trans = Matrix.Translation(mtx.to_translation())
-            mtx = trans @ parentScale @ trans.inverted() @ mtx
+            mtx = trans @ parentScale @ trans.inverted_safe() @ mtx
         localScales[bone] = mtx.to_scale()
         # and then we can't forget about space conversions!
         if parent:
