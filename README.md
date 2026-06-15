@@ -19,9 +19,9 @@ The same process can be used to update BerryBush to a new version. You can also 
 
 Detailed guides and documentation are available in [the wiki](https://github.com/hayden0729/berrybush/wiki). Additionally, if you're ever unsure what something does within Blender, you can hover over it to view its description.
 
-Feature requests, bug reports, documentation corrections, or other feedback are all welcome on [the issues page](https://github.com/hayden0729/berrybush/issues). Note that this project is mainly intended for New Super Mario Bros. Wii modding, so although it may happen to work for other games, NSMBW-related features are the primary concern.
+Feature requests, bug reports, documentation corrections, or other feedback are all welcome on [the issues page](https://github.com/hayden0729/berrybush/issues). If I don't respond, please don't hesitate to reach out over Discord (see below), as I am more active there. Note that this project is mainly intended for New Super Mario Bros. Wii modding, so although it may happen to work for other games, NSMBW-related features are the primary concern.
 
-Still have questions? You can also always feel free to contact me on Discord (@hayden0729) in [Evolution](https://discord.gg/aZAaXVJ) or [Horizon](https://discord.gg/XnQJnwa).
+You can always feel free to contact me on Discord (@hayden0729) in DMs or any of the modding servers ([Evolution](https://discord.gg/aZAaXVJ), [Horizon](https://discord.gg/XnQJnwa), [NHD](https://discord.gg/nXgyHrMyjA)).
 
 # Resources/Credits
 
